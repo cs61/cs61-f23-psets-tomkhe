@@ -1,5 +1,6 @@
 #include "m61.hh"
 #include <cstdio>
+#include <iostream>
 #include <cassert>
 // Check diabolical failed allocation.
 

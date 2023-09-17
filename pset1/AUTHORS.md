@@ -3,15 +3,13 @@ Author and collaborators
 
 Student
 -------
-(Your name.)
+Tom He
 
 
 Collaborators
 -------------
-(List any other collaborators and describe help you got from other students
-in the class.)
-
+None. 
 
 Citations
 ---------
-(List any other sources consulted.)
+None. 
