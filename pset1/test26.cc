@@ -3,7 +3,11 @@
 #include <cassert>
 #include <vector>
 #include <algorithm>
+#include <iostream>
+#include <map>
 // Check that small blocks of memory can be coalesced into larger pieces.
+
+using namespace std; 
 
 int main() {
     const size_t nmax = 7168;
