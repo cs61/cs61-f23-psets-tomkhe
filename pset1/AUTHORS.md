@@ -12,4 +12,4 @@ None.
 
 Citations
 ---------
-None. 
+https://en.cppreference.com/w/

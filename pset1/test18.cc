@@ -2,6 +2,9 @@
 #include <cstdio>
 #include <cassert>
 #include <cstring>
+#include <iostream>
+
+using namespace std; 
 
 // Check diabolical m61_calloc.
 

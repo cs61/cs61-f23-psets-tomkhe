@@ -15,8 +15,10 @@
 using namespace std;
 
 m61_statistics global_stats; //variable that tracks stats
-const int ALIGNMENT = alignof(std::max_align_t); 
-const int MARKER = '!'; 
+const size_t ALIGNMENT = alignof(std::max_align_t); 
+const size_t MARKER = '!'; 
+const size_t MAX_ALLOCATION = (1<<30); 
+const size_t MAXN = (size_t) -1 / 8 + 2; 
 char* curr_file; 
 
 struct m61_memory_buffer {
@@ -48,20 +50,57 @@ void* itop(size_t x) { return &default_buffer.buffer[x]; }
 
 size_t ptoi(void* x) { return (uintptr_t) x - (uintptr_t) itop(0); }
 
-struct metadata
+//start of code for buddy allocation system
+struct metadata //leave 64 bytes of overhead
+{
+    size_t l, r, left_child = MAXN, right_child = MAXN, available_sizes, line_allocated; 
+};
+
+metadata make_metadata(size_t l, size_t r, size_t left_child, size_t right_child, size_t available_sizes, size_t line_allocated)
+{
+    metadata result = {l, r, left_child, right_child, available_sizes, line_allocated}; 
+    return result; 
+}
+
+metadata read_metadata(size_t start_pos)
+{
+    metadata result; 
+    memcpy(&result, itop(start_pos), sizeof(result)); 
+    return result; 
+}
+
+void write_metadata(size_t start_pos, metadata block_info)
+{
+    memcpy(itop(start_pos), &block_info, sizeof(block_info)); 
+}
+
+size_t find_exact_match(size_t pos, size_t l, size_t r, size_t target)
+{
+    size_t mid = (l + r) / 2; 
+    
+}
+
+size_t create_allocation(size_t pos, size_t l, size_t r, size_t target)
+{
+
+}
+
+//end of code for buddy allocation system
+
+struct old_metadata
 {
     size_t sz; 
     size_t alignment_sz; 
     size_t line_allocated; 
 };
 
-metadata make_metadata(size_t sz, size_t alignment_sz, size_t line_allocated)
+old_metadata make_old_metadata(size_t sz, size_t alignment_sz, size_t line_allocated)
 {
-    metadata temp = {sz, alignment_sz, line_allocated}; 
+    old_metadata temp = {sz, alignment_sz, line_allocated}; 
     return temp; 
 }
 
-map<size_t, metadata> allocated_blocks; //stores allocations as (key: starting position; value: {total size, alignment buffer size})
+map<size_t, old_metadata> allocated_blocks; //stores allocations as (key: ptr to starting position; value: {total size, alignment buffer size})
 map<size_t, size_t> free_blocks = {{0, default_buffer.size}}; //stores free space as (key: ptr to starting position; value: block size)
 set<void*> freed; //tracks already freed pointers
 
@@ -113,7 +152,7 @@ void* m61_malloc(size_t sz, const char* file, int line) {
 
     // Otherwise there is enough space; claim the next `sz` bytes
     void* ptr = itop(block_start);
-    allocated_blocks.insert({block_start, make_metadata(sz, alignment_sz, line)}); 
+    allocated_blocks.insert({block_start, make_old_metadata(sz, alignment_sz, line)}); 
 
     //delete from list of freed points
     if (freed.find(ptr) != freed.end()) freed.erase(freed.find(ptr)); 
