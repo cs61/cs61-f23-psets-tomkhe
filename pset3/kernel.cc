@@ -63,6 +63,7 @@ void kernel_start(const char* command) {
     // (re-)initialize kernel page table
     for (uintptr_t addr = 0; addr < MEMSIZE_PHYSICAL; addr += PAGESIZE) {
         int perm = PTE_P | PTE_W | PTE_U;
+        if (addr < 0x100000 && addr != 0xB8000) perm = PTE_P | PTE_W;
         if (addr == 0) {
             // nullptr is inaccessible even to the kernel
             perm = 0;
@@ -162,7 +163,17 @@ void process_setup(pid_t pid, const char* program_name) {
     init_process(&ptable[pid], 0);
 
     // initialize process page table
-    ptable[pid].pagetable = kernel_pagetable;
+    ptable[pid].pagetable = kalloc_pagetable(); 
+
+    for (vmiter it(ptable[pid].pagetable, 0); it.va() < PROC_START_ADDR; it += PAGESIZE)
+    {
+        uintptr_t paddr = vmiter(kernel_pagetable, it.va()).pa(); 
+        int perm = vmiter(kernel_pagetable, it.va()).perm(); 
+        // perm &= ~(1 << 2); 
+        // if (paddr == 0xB8000) perm |= PTE_U; 
+        int r = vmiter(ptable[pid].pagetable, it.va()).try_map(paddr, perm); 
+        assert(r == 0); 
+    }
 
     // obtain reference to program image
     // (The program image models the process executable.)
@@ -176,27 +187,36 @@ void process_setup(pid_t pid, const char* program_name) {
             // `a` is the process virtual address for the next code or data page
             // (The handout code requires that the corresponding physical
             // address is currently free.)
-            assert(physpages[a / PAGESIZE].refcount == 0);
-            ++physpages[a / PAGESIZE].refcount;
+
+            //set up new mapping
+            void* paddr = kalloc(PAGESIZE); 
+            assert(paddr != nullptr); 
+            int perm = PTE_P | PTE_U; 
+            if (seg.writable()) perm |= PTE_W; 
+            
+            int r = vmiter(ptable[pid].pagetable, a).try_map(paddr, perm); 
+            assert(r == 0); 
+
+            memset(paddr, 0, seg.size());
+            memcpy(paddr, seg.data() + a - seg.va(), seg.data_size());
         }
     }
 
     // copy instructions and data from program image into process memory
-    for (auto seg = pgm.begin(); seg != pgm.end(); ++seg) {
-        memset((void*) seg.va(), 0, seg.size());
-        memcpy((void*) seg.va(), seg.data(), seg.data_size());
-    }
 
     // mark entry point
     ptable[pid].regs.reg_rip = pgm.entry();
 
     // allocate and map stack segment
     // Compute process virtual address for stack page
-    uintptr_t stack_addr = PROC_START_ADDR + PROC_SIZE * pid - PAGESIZE;
+    uintptr_t stack_addr = MEMSIZE_VIRTUAL - PAGESIZE;
+    void* paddr = kalloc(PAGESIZE); 
+    assert(paddr != nullptr); 
+    int r = vmiter(ptable[pid].pagetable, stack_addr).try_map(paddr, PTE_P | PTE_W | PTE_U); 
+    assert(r == 0); 
+
     // The handout code requires that the corresponding physical address
     // is currently free.
-    assert(physpages[stack_addr / PAGESIZE].refcount == 0);
-    ++physpages[stack_addr / PAGESIZE].refcount;
     ptable[pid].regs.reg_rsp = stack_addr + PAGESIZE;
 
     // mark process as runnable
@@ -270,7 +290,6 @@ void exception(regstate* regs) {
                    regs->reg_intno, regs->reg_rip);
 
     }
-
 
     // Return to the current process (or run something else).
     if (current->state == P_RUNNABLE) {
@@ -350,10 +369,36 @@ uintptr_t syscall(regstate* regs) {
 //    should implement the specification for `sys_page_alloc`
 //    in `u-lib.hh` (but in the handout code, it does not).
 
+//    Allocate a page of memory at address `addr` for this process. The
+//    newly-allocated memory is initialized to 0. Any memory previously
+//    located at `addr` should be freed. Returns 0 on success. If there is a
+//    failure (out of memory or invalid argument), returns a negative error
+//.   code (such as -1) without modifying memory.
+//
+//    `Addr` should be page-aligned (i.e., a multiple of PAGESIZE == 4096),
+//    >= PROC_START_ADDR, and < MEMSIZE_VIRTUAL. If any of these requirements
+//    are not met, returns a negative error code without modifying memory.
+
 int syscall_page_alloc(uintptr_t addr) {
-    assert(physpages[addr / PAGESIZE].refcount == 0);
-    ++physpages[addr / PAGESIZE].refcount;
-    memset((void*) addr, 0, PAGESIZE);
+    //check alignment and other conditions
+    if (addr % PAGESIZE || addr < PROC_START_ADDR || addr >= MEMSIZE_VIRTUAL) return -1; 
+
+    //check if page can't be modified by user-level processes
+    if ((vmiter(kernel_pagetable, addr).perm() & PTE_U) == 0) return -1; 
+
+    //assign new page in heap
+    void* paddr = kalloc(PAGESIZE); 
+    if (paddr == nullptr) return -1; 
+
+    int r = vmiter(current->pagetable, addr).try_map(paddr, PTE_P | PTE_W | PTE_U); 
+    if (r != 0)
+    {
+        kfree(paddr); 
+        return -1; 
+    }
+
+    // ++physpages[addr / PAGESIZE].refcount;
+    memset((void*) paddr, 0, PAGESIZE);
     return 0;
 }
 
