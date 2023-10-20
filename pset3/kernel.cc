@@ -383,15 +383,12 @@ int syscall_page_alloc(uintptr_t addr) {
     //check alignment and other conditions
     if (addr % PAGESIZE || addr < PROC_START_ADDR || addr >= MEMSIZE_VIRTUAL) return -1; 
 
-    //check if page can't be modified by user-level processes
-    if ((vmiter(kernel_pagetable, addr).perm() & PTE_U) == 0) return -1; 
-
     //assign new page in heap
     void* paddr = kalloc(PAGESIZE); 
     if (paddr == nullptr) return -1; 
 
     int r = vmiter(current->pagetable, addr).try_map(paddr, PTE_P | PTE_W | PTE_U); 
-    if (r != 0)
+    if (r < 0)
     {
         kfree(paddr); 
         return -1; 
