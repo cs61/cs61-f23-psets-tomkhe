@@ -1,8 +1,9 @@
-#include "io61.hh"
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <climits>
-#include <cerrno>
+#include "io61.hh" 
+#include <sys/types.h> 
+#include <sys/stat.h> 
+#include <climits> 
+#include <cerrno> 
+#include <sys/mman.h> 
 
 // io61.cc
 //    YOUR CODE HERE!
@@ -12,10 +13,23 @@
 //    Data structure for io61 file wrappers. Add your own stuff.
 
 struct io61_file {
-    int fd = -1;     // file descriptor
-    int mode;        // open mode (O_RDONLY or O_WRONLY)
+    static const off_t bufsize = 4096; 
+
+    int fd = -1;        // file descriptor
+    int mode;           // open mode (O_RDONLY or O_WRONLY)
+    char buf[bufsize];  // single-slot cache
+
+    off_t tag = 0;          // file offset of first byte of cache data (0 when file opened)
+    off_t end_tag = 0;      // file offset one past last byte of cached data (0 when file opened)
+    off_t pos_tag = 0;      // file offset of cache (in read, this is the file offset of next char to be read)
 };
 
+void io61_check_assertions(io61_file* f)
+{
+    assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
+    assert(f->end_tag - f->pos_tag <= f->bufsize);
+    if (f->mode == O_WRONLY) assert(f->pos_tag == f->end_tag); 
+}
 
 // io61_fdopen(fd, mode)
 //    Returns a new io61_file for file descriptor `fd`. `mode` is either
@@ -48,7 +62,7 @@ int io61_close(io61_file* f) {
 
 int io61_readc(io61_file* f) {
     unsigned char ch;
-    ssize_t nr = read(f->fd, &ch, 1);
+    ssize_t nr = io61_read(f, &ch, 1);
     if (nr == 1) {
         return ch;
     } else if (nr == 0) {
@@ -58,6 +72,22 @@ int io61_readc(io61_file* f) {
         assert(nr == -1 && errno > 0);
         return -1;
     }
+}
+
+int io61_fill(io61_file* f)
+{
+    io61_check_assertions(f);
+
+    // Reset the cache to empty.
+    f->tag = f->end_tag; 
+    f->pos_tag = f->end_tag; 
+
+    ssize_t nread = read(f->fd, f->buf, f->bufsize); 
+    if (nread >= 0) f->end_tag = f->tag + nread; 
+    else return -1; 
+
+    io61_check_assertions(f);
+    return 0; 
 }
 
 
@@ -72,15 +102,24 @@ int io61_readc(io61_file* f) {
 //    This is called a “short read.”
 
 ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
-    size_t nread = 0;
-    while (nread != sz) {
-        int ch = io61_readc(f);
-        if (ch == EOF) {
-            break;
+    io61_check_assertions(f); 
+
+    size_t nread = 0; 
+    // nread = read(f->fd, buf, sz);
+    while (nread < sz)
+    {
+        if (f->pos_tag == f->end_tag)
+        {
+            //buffer refill
+            int r = io61_fill(f); 
+            if (r == -1 || f->pos_tag == f->end_tag) break; 
         }
-        buf[nread] = ch;
-        ++nread;
+        size_t curr_read = std::min((size_t) (f->end_tag - f->pos_tag), (size_t) (sz - nread)); 
+        memcpy(&buf[nread], &f->buf[f->pos_tag - f->tag], curr_read); 
+        f->pos_tag += curr_read; 
+        nread += curr_read; 
     }
+
     if (nread != 0 || sz == 0 || errno == 0) {
         return nread;
     } else {
@@ -95,12 +134,42 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
 
 int io61_writec(io61_file* f, int c) {
     unsigned char ch = c;
-    ssize_t nw = write(f->fd, &ch, 1);
+    ssize_t nw = io61_write(f, &ch, 1);
     if (nw == 1) {
         return 0;
     } else {
         return -1;
     }
+}
+
+// io61_flush(f)
+//    If `f` was opened write-only, `io61_flush(f)` forces a write of any
+//    cached data written to `f`. Returns 0 on success; returns -1 if an error
+//    is encountered before all cached data was written.
+//
+//    If `f` was opened read-only, `io61_flush(f)` returns 0. It may also
+//    drop any data cached for reading.
+
+int io61_flush(io61_file* f) {
+    // check invariants
+    io61_check_assertions(f); 
+
+    if (f->mode == O_RDONLY) return 0; 
+
+    // if clean, 
+    if (f->pos_tag - f->tag == 0) return 0; 
+
+    ssize_t nwrite = 0; 
+    do
+    {
+        ssize_t curr_write = write(f->fd, &f->buf[nwrite], f->pos_tag - f->tag - nwrite); 
+        nwrite += std::max(curr_write, (ssize_t) 0); 
+    } while (nwrite < f->pos_tag - f->tag && (errno == EAGAIN || errno == EINTR));
+
+    // flush failed
+    if (nwrite != f->pos_tag - f->tag) return -1; 
+    f->tag = f->pos_tag; 
+    return 0; 
 }
 
 
@@ -112,13 +181,27 @@ int io61_writec(io61_file* f, int c) {
 //    before the error occurred.
 
 ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
-    size_t nwritten = 0;
-    while (nwritten != sz) {
-        if (io61_writec(f, buf[nwritten]) == -1) {
-            break;
+    io61_check_assertions(f);
+
+    size_t nwritten = 0; 
+    // nwritten = write(f->fd, buf, sz); 
+    while (nwritten < sz)
+    {
+        if (f->end_tag == f->tag + f->bufsize)
+        {
+            // flush buffer
+            int r = io61_flush(f); 
+            if (r == -1) break; 
         }
-        ++nwritten;
+
+        size_t curr_write = std::min((size_t) (f->bufsize + f->tag - f->pos_tag), (size_t) (sz-nwritten)); 
+        if (curr_write == 0) break; 
+        memcpy(&f->buf[f->pos_tag - f->tag], &buf[nwritten], curr_write); 
+        nwritten += curr_write; 
+        f->pos_tag += curr_write; 
+        f->end_tag += curr_write; 
     }
+
     if (nwritten != 0 || sz == 0) {
         return nwritten;
     } else {
@@ -127,32 +210,34 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
 }
 
 
-// io61_flush(f)
-//    If `f` was opened write-only, `io61_flush(f)` forces a write of any
-//    cached data written to `f`. Returns 0 on success; returns -1 if an error
-//    is encountered before all cached data was written.
-//
-//    If `f` was opened read-only, `io61_flush(f)` returns 0. It may also
-//    drop any data cached for reading.
-
-int io61_flush(io61_file* f) {
-    (void) f;
-    return 0;
-}
-
-
 // io61_seek(f, off)
 //    Changes the file pointer for file `f` to `off` bytes into the file.
 //    Returns 0 on success and -1 on failure.
 
 int io61_seek(io61_file* f, off_t off) {
-    off_t r = lseek(f->fd, (off_t) off, SEEK_SET);
-    // Ignore the returned offset unless it’s an error.
-    if (r == -1) {
-        return -1;
-    } else {
-        return 0;
+    io61_check_assertions(f); 
+
+    // off_t r = lseek(f->fd, (off_t) off, SEEK_SET);
+    // if (r == -1) return -1; 
+
+    if (f->mode == O_RDONLY && f->tag <= off && f->end_tag > off)
+    {
+        f->pos_tag = off; 
+        return 0; 
     }
+
+    if (f->mode == O_WRONLY)
+    {
+        if (io61_flush(f) < 0) return -1; 
+    }
+
+    off_t r = lseek(f->fd, (off_t) off, SEEK_SET);
+    if (r == -1) return -1; 
+
+    f->tag = off; 
+    f->pos_tag = off; 
+    f->end_tag = off; 
+    return 0; 
 }
 
 
