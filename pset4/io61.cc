@@ -8,6 +8,7 @@
 // io61.cc
 //    YOUR CODE HERE!
 
+// checkin code
 
 // io61_file
 //    Data structure for io61 file wrappers. Add your own stuff.
