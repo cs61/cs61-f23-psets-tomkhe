@@ -24,6 +24,7 @@ int io61_seek(io61_file* f, off_t off);
 int io61_readc(io61_file* f);
 int io61_writec(io61_file* f, int c);
 
+int io61_fill(io61_file* f); 
 ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz);
 ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz);
 
