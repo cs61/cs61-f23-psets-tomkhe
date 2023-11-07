@@ -13,7 +13,7 @@
 //    Data structure for io61 file wrappers. Add your own stuff.
 
 struct io61_file {
-    static const off_t bufsize = 1 << 13; 
+    static const off_t bufsize = 1 << 12; 
 
     int fd = -1;                // file descriptor
     int mode;                   // open mode (O_RDONLY or O_WRONLY)
