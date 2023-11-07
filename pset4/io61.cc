@@ -13,18 +13,19 @@
 //    Data structure for io61 file wrappers. Add your own stuff.
 
 struct io61_file {
-    static const off_t bufsize = 4096; 
+    static const off_t bufsize = 1 << 15; 
 
-    int fd = -1;            // file descriptor
-    int mode;               // open mode (O_RDONLY or O_WRONLY)
-    char buf[bufsize];      // single-slot cache
-    off_t size;             // file size
-    char* map = nullptr;    // memory-mapped IO
-    bool is_seq = true;     // if access pattern is sequential
+    int fd = -1;                // file descriptor
+    int mode;                   // open mode (O_RDONLY or O_WRONLY)
+    char buf[bufsize];          // single-slot cache
+    off_t size;                 // file size
+    char* map = nullptr;        // memory-mapped IO
+    bool is_seq = true;         // if access pattern is sequential
 
-    off_t tag = 0;          // file offset of first byte of cache data (0 when file opened)
-    off_t end_tag = 0;      // file offset one past last byte of cached data (0 when file opened)
-    off_t pos_tag = 0;      // file offset of cache (in read, this is the file offset of next char to be read)
+    off_t tag = 0;              // file offset of first byte of cache data (0 when file opened)
+    off_t end_tag = 0;          // file offset one past last byte of cached data (0 when file opened)
+    off_t pos_tag = 0;          // file offset of cache (in read, this is the file offset of next char to be read)
+    off_t last_pos_tag = -1;    // last pos_tag
 };
 
 void io61_check_assertions(io61_file* f)
@@ -94,9 +95,10 @@ int io61_readc(io61_file* f) {
     // mappable file
     if (f->pos_tag < f->end_tag)
     {
-        if (f->is_seq) f->pos_tag++; 
+        f->last_pos_tag = f->pos_tag; 
+        f->pos_tag++; 
         io61_check_assertions(f); 
-        return f->map[f->pos_tag - f->is_seq]; 
+        return f->map[f->last_pos_tag]; 
     }else return -1; 
 }
 
@@ -141,6 +143,7 @@ ssize_t io61_read_cache(io61_file* f, unsigned char* buf, size_t sz) {
         }
         size_t curr_read = std::min((size_t) (f->end_tag - f->pos_tag), (size_t) (sz - nread)); 
         memcpy(&buf[nread], &f->buf[f->pos_tag - f->tag], curr_read); 
+        f->last_pos_tag = f->pos_tag; 
         f->pos_tag += curr_read; 
         nread += curr_read; 
     }
@@ -169,10 +172,8 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
     // Copy `sz` number of bytes from `f` into `buf`
     size_t nread = std::min(sz, (size_t) (f->size - f->pos_tag)); 
     memcpy(buf, &f->map[f->pos_tag], nread); 
-    if (f->is_seq)
-    {
-        f->pos_tag += nread; 
-    }
+    f->last_pos_tag = f->pos_tag; 
+    f->pos_tag += nread; 
     return nread; 
 }
 
@@ -191,6 +192,7 @@ int io61_writec(io61_file* f, int c) {
 
     f->buf[f->pos_tag - f->tag] = c; 
 
+    f->last_pos_tag = f->pos_tag; 
     f->pos_tag++; 
     f->end_tag++; 
 
@@ -254,6 +256,7 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
         if (curr_write == 0) break; 
         memcpy(&f->buf[f->pos_tag - f->tag], &buf[nwritten], curr_write); 
         nwritten += curr_write; 
+        f->last_pos_tag = f->pos_tag; 
         f->pos_tag += curr_write; 
         f->end_tag += curr_write; 
     }
@@ -275,6 +278,7 @@ int io61_seek(io61_file* f, off_t off) {
 
     if (f->mode == O_RDONLY && f->tag <= off && f->end_tag > off)
     {
+        f->last_pos_tag = f->pos_tag; 
         f->pos_tag = off; 
         return 0; 
     }
@@ -284,6 +288,7 @@ int io61_seek(io61_file* f, off_t off) {
     // update kernal and IO position
     off_t r = lseek(f->fd, (off_t) off, SEEK_SET);
     if (r == -1) return -1; 
+    f->last_pos_tag = f->pos_tag; 
     f->pos_tag = off; 
 
     if (f->mode == O_WRONLY)
