@@ -13,7 +13,7 @@
 //    Data structure for io61 file wrappers. Add your own stuff.
 
 struct io61_file {
-    static const off_t bufsize = 1 << 12; 
+    static const off_t bufsize = 1 << 15; 
 
     int fd = -1;                // file descriptor
     int mode;                   // open mode (O_RDONLY or O_WRONLY)
@@ -54,7 +54,7 @@ io61_file* io61_fdopen(int fd, int mode) {
 int io61_close(io61_file* f) {
     io61_flush(f);
     int r = close(f->fd);
-    munmap(f->map, (f->size > 0) ? f->size : f->bufsize); 
+    if (f->map != MAP_FAILED) munmap(f->map, f->size); 
     delete f;
     return r;
 }
@@ -64,16 +64,29 @@ int io61_close(io61_file* f) {
 //    which equals -1, on end of file or error.
 
 int io61_readc(io61_file* f) {
-    io61_check_assertions(f); 
+    // io61_check_assertions(f); 
+
+    // if (f->is_seq)
+    // {
+    //     if (f->pos_tag == f->end_tag)
+    //     {
+    //         if(io61_fill(f) < 0 || f->pos_tag == f->end_tag) return -1; 
+    //     }
+
+    //     unsigned char ch = f->buf[f->pos_tag - f->tag]; 
+    //     f->pos_tag++; 
+    //     // io61_check_assertions(f); 
+    //     return ch; 
+    // }
 
     if (f->map == nullptr)
     {
-        f->map = (char*) mmap(nullptr, f->size, PROT_READ, MAP_PRIVATE, f->fd, 0); 
+        f->map = (char*) mmap(nullptr, f->size, PROT_READ | PROT_WRITE, MAP_PRIVATE, f->fd, 0); 
         if (f->map != MAP_FAILED)
         {
             f->tag = 0; 
             f->end_tag = f->size; 
-            if (f->is_seq) posix_fadvise(f->fd, 0, f->size, POSIX_FADV_SEQUENTIAL);
+            if (f->is_seq) madvise(f->map, f->size, MADV_SEQUENTIAL);
         }
     }
 
@@ -87,7 +100,7 @@ int io61_readc(io61_file* f) {
 
         unsigned char ch = f->buf[f->pos_tag - f->tag]; 
         f->pos_tag++; 
-        io61_check_assertions(f); 
+        // io61_check_assertions(f); 
         return ch; 
     }
 
@@ -95,14 +108,14 @@ int io61_readc(io61_file* f) {
     if (f->pos_tag < f->end_tag)
     {
         f->pos_tag++; 
-        io61_check_assertions(f); 
+        // io61_check_assertions(f); 
         return f->map[f->pos_tag-1]; 
     }else return -1; 
 }
 
 int io61_fill(io61_file* f)
 {
-    io61_check_assertions(f);
+    // io61_check_assertions(f);
 
     // Reset the cache to empty.
     f->tag = f->end_tag; 
@@ -112,7 +125,7 @@ int io61_fill(io61_file* f)
     if (nread >= 0) f->end_tag = f->tag + nread; 
     else return -1; 
 
-    io61_check_assertions(f);
+    // io61_check_assertions(f);
     return 0; 
 }
 
@@ -128,7 +141,7 @@ int io61_fill(io61_file* f)
 //    This is called a â€œshort read.â€
 
 ssize_t io61_read_cache(io61_file* f, unsigned char* buf, size_t sz) {
-    io61_check_assertions(f); 
+    // io61_check_assertions(f); 
 
     size_t nread = 0; 
     while (nread < sz)
@@ -153,6 +166,8 @@ ssize_t io61_read_cache(io61_file* f, unsigned char* buf, size_t sz) {
 }
 
 ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
+    // if (f->is_seq) return io61_read_cache(f, buf, sz); 
+
     if (f->map == nullptr)
     {
         f->map = (char*) mmap(nullptr, f->size, PROT_READ, MAP_PRIVATE, f->fd, 0); 
@@ -160,7 +175,7 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
         {
             f->tag = 0; 
             f->end_tag = f->size; 
-            if (f->is_seq) posix_fadvise(f->fd, 0, f->size, POSIX_FADV_SEQUENTIAL);
+            if (f->is_seq) madvise(f->map, f->size, MADV_SEQUENTIAL);
         }
     }
 
@@ -179,7 +194,7 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
 //    Returns 0 on success and -1 on error.
 
 int io61_writec(io61_file* f, int c) {
-    io61_check_assertions(f); 
+    // io61_check_assertions(f); 
 
     if (f->end_tag == f->tag + f->bufsize)
     {
@@ -191,7 +206,7 @@ int io61_writec(io61_file* f, int c) {
     f->pos_tag++; 
     f->end_tag++; 
 
-    io61_check_assertions(f); 
+    // io61_check_assertions(f); 
     return 0; 
 }
 
@@ -205,7 +220,7 @@ int io61_writec(io61_file* f, int c) {
 
 int io61_flush(io61_file* f) {
     // check invariants
-    io61_check_assertions(f); 
+    // io61_check_assertions(f); 
 
     if (f->mode == O_RDONLY) return 0; 
 
@@ -234,7 +249,7 @@ int io61_flush(io61_file* f) {
 //    before the error occurred.
 
 ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
-    io61_check_assertions(f);
+    // io61_check_assertions(f);
 
     size_t nwritten = 0; 
     // nwritten = write(f->fd, buf, sz); 
@@ -268,8 +283,8 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
 //    Returns 0 on success and -1 on failure.
 
 int io61_seek(io61_file* f, off_t off) {
-    io61_check_assertions(f); 
-
+    // io61_check_assertions(f); 
+    assert(f->map == nullptr || f->is_seq == false); 
     if (f->mode == O_RDONLY && f->tag <= off && f->end_tag > off)
     {
         f->pos_tag = off; 
@@ -309,7 +324,7 @@ int io61_seek(io61_file* f, off_t off) {
         return 0; 
     }
     
-    if (f->is_seq) posix_fadvise(f->fd, 0, f->size, POSIX_FADV_NORMAL); 
+    if (f->is_seq) madvise(f->map, f->size, MADV_DONTNEED);
     f->is_seq = false; 
     return 0; 
 }
