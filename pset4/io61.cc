@@ -96,7 +96,7 @@ int io61_readc(io61_file* f) {
     {
         f->pos_tag++; 
         io61_check_assertions(f); 
-        return f->map[f->pos_tag-1]; 
+        return (unsigned char) f->map[f->pos_tag-1]; 
     }else return -1; 
 }
 
@@ -136,8 +136,7 @@ ssize_t io61_read_cache(io61_file* f, unsigned char* buf, size_t sz) {
         if (f->pos_tag == f->end_tag)
         {
             //buffer refill
-            int r = io61_fill(f); 
-            if (r == -1 || f->pos_tag == f->end_tag) break; 
+            if (io61_fill(f) == -1 || f->pos_tag == f->end_tag) break; 
         }
         size_t curr_read = std::min((size_t) (f->end_tag - f->pos_tag), (size_t) (sz - nread)); 
         memcpy(&buf[nread], &f->buf[f->pos_tag - f->tag], curr_read); 
@@ -244,7 +243,7 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
         {
             // flush buffer
             int r = io61_flush(f); 
-            if (r == -1) break; 
+            if (io61_flush(f) == -1) break; 
         }
 
         size_t curr_write = std::min((size_t) (f->bufsize + f->tag - f->pos_tag), (size_t) (sz-nwritten)); 
