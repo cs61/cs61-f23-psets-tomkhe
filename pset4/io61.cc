@@ -242,7 +242,6 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
         if (f->end_tag == f->tag + f->bufsize)
         {
             // flush buffer
-            int r = io61_flush(f); 
             if (io61_flush(f) == -1) break; 
         }
 
