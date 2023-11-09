@@ -24,7 +24,7 @@ struct io61_file {
     int mode;                   // open mode (O_RDONLY or O_WRONLY)
     char buf[bufsize];          // fully associative buffer
     off_t size;                 // file size
-    char* map;        // memory-mapped IO
+    char* map;                  // memory-mapped IO
     bool is_seq = true;         // if access pattern is sequential
 
     off_t tag = 0;              // file offset of first byte of cache data (0 when file opened)
