@@ -18,7 +18,7 @@
 //    Data structure for io61 file wrappers. Add your own stuff.
 
 struct io61_file {
-    static const off_t bufsize = 1 << 13; 
+    static const off_t bufsize = 1 << 12; 
 
     int fd = -1;                // file descriptor
     int mode;                   // open mode (O_RDONLY or O_WRONLY)
@@ -101,7 +101,7 @@ int io61_readc(io61_file* f) {
             f->pos_tag++; 
             assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
             assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size); 
-            return f->map[f->pos_tag-1]; 
+            return (unsigned char) f->map[f->pos_tag-1]; 
         }else return -1; 
     }
 
