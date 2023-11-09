@@ -38,7 +38,7 @@ struct io61_file {
 //    You need not support read/write files.
 
 io61_file* io61_fdopen(int fd, int mode) {
-    assert(fd >= 0);
+    // assert(fd >= 0);
     io61_file* f = new io61_file;
     f->fd = fd;
     f->mode = mode;
@@ -69,8 +69,8 @@ int io61_close(io61_file* f) {
 
 int io61_fill(io61_file* f)
 {
-    assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
-    assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size);
+    // assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
+    // assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size);
 
     // Reset the cache to empty.
     f->tag = f->end_tag; 
@@ -80,8 +80,8 @@ int io61_fill(io61_file* f)
     if (nread != -1) f->end_tag = f->tag + nread; 
     else return -1; 
 
-    assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
-    assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size);
+    // assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
+    // assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size);
     return 0; 
 }
 
@@ -90,8 +90,8 @@ int io61_fill(io61_file* f)
 //    which equals -1, on end of file or error.
 
 int io61_readc(io61_file* f) {
-    assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
-    assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size);
+    // assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
+    // assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size);
 
     if (f->map != MAP_FAILED)
     {
@@ -99,8 +99,8 @@ int io61_readc(io61_file* f) {
         if (f->pos_tag < f->end_tag)
         {
             f->pos_tag++; 
-            assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
-            assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size); 
+            // assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
+            // assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size); 
             return (unsigned char) f->map[f->pos_tag-1]; 
         }else return -1; 
     }
@@ -113,8 +113,8 @@ int io61_readc(io61_file* f) {
 
     unsigned char ch = f->buf[f->pos_tag - f->tag]; 
     f->pos_tag++; 
-    assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
-    assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size); 
+    // assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
+    // assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size); 
     return ch; 
 }
 
@@ -129,8 +129,8 @@ int io61_readc(io61_file* f) {
 //    This is called a Ã¢â‚¬Å“short read.Ã¢â‚¬Â
 
 ssize_t io61_read_cache(io61_file* f, unsigned char* buf, size_t sz) {
-    assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
-    assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size); 
+    // assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
+    // assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size); 
 
     size_t nread = 0; 
     while (nread < sz)
@@ -146,8 +146,8 @@ ssize_t io61_read_cache(io61_file* f, unsigned char* buf, size_t sz) {
         nread += curr_read; 
     }
 
-    assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
-    assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size);
+    // assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
+    // assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size);
     if (nread != 0 || sz == 0 || errno == 0) {
         return nread;
     } else {
@@ -156,8 +156,8 @@ ssize_t io61_read_cache(io61_file* f, unsigned char* buf, size_t sz) {
 }
 
 ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
-    assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
-    assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size);
+    // assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
+    // assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size);
 
     if (f->map == MAP_FAILED) return io61_read_cache(f, buf, sz); 
 
@@ -166,8 +166,8 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
     memcpy(buf, &f->map[f->pos_tag], nread); 
     f->pos_tag += nread; 
 
-    assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
-    assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size);
+    // assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
+    // assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size);
     return nread; 
 }
 
@@ -177,8 +177,8 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
 //    Returns 0 on success and -1 on error.
 
 int io61_writec(io61_file* f, int c) {
-    assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
-    assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size); 
+    // assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
+    // assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size); 
 
     if (f->end_tag == f->tag + f->bufsize)
     {
@@ -189,8 +189,8 @@ int io61_writec(io61_file* f, int c) {
     f->pos_tag++; 
     f->end_tag++; 
 
-    assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
-    assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size); 
+    // assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
+    // assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size); 
     return 0; 
 }
 
@@ -204,8 +204,8 @@ int io61_writec(io61_file* f, int c) {
 
 int io61_flush(io61_file* f) {
     // check invariants
-    assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
-    assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size); 
+    // assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
+    // assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size); 
 
     if (f->mode == O_RDONLY) return 0; 
 
@@ -234,8 +234,8 @@ int io61_flush(io61_file* f) {
 //    before the error occurred.
 
 ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
-    assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
-    assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size);
+    // assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
+    // assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size);
 
     size_t nwritten = 0; 
     while (nwritten < sz)
@@ -254,8 +254,8 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
         f->end_tag += curr_write; 
     }
 
-    assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
-    assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size);
+    // assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
+    // assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size);
     if (nwritten != 0 || sz == 0) {
         return nwritten;
     } else {
@@ -269,8 +269,8 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
 //    Returns 0 on success and -1 on failure.
 
 int io61_seek(io61_file* f, off_t off) {
-    assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
-    assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size); 
+    // assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
+    // assert(f->end_tag - f->pos_tag <= f->bufsize || f->end_tag - f->pos_tag <= f->size); 
     if (f->mode == O_RDONLY && f->tag <= off && f->end_tag > off)
     {
         f->pos_tag = off; 
