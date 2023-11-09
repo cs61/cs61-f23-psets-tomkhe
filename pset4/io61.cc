@@ -50,7 +50,7 @@ io61_file* io61_fdopen(int fd, int mode) {
         {
             f->tag = 0; 
             f->end_tag = f->size; 
-            madvise(f->map, f->size, MADV_SEQUENTIAL);
+            posix_fadvise(f->fd, 0, f->size, POSIX_FADV_SEQUENTIAL);
         }
     }
     return f;
@@ -300,7 +300,7 @@ int io61_seek(io61_file* f, off_t off) {
         return 0; 
     }
     
-    if (f->is_seq) madvise(f->map, f->size, MADV_NORMAL);
+    if (f->is_seq) posix_fadvise(f->fd, 0, f->size, POSIX_FADV_NORMAL);
     f->is_seq = false; 
     return 0; 
 }
