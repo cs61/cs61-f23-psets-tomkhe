@@ -172,12 +172,24 @@ void run_list(list* ls) {
     conditional* curr_conditional = ls->child_conditional; 
     pipeline* curr_pipeline = curr_conditional->child_pipeline; 
     command* curr_command = curr_pipeline->child_command; 
-    bool run = 1; 
+    bool run = true; 
     int status = 0; 
 
+    pid_t p = 1; // default mode is parent
     while (curr_conditional)
     {
         assert(curr_command && curr_pipeline && curr_conditional); 
+
+        while (p && curr_conditional->is_background && curr_conditional)
+        {
+            // create subshells
+            p = fork(); 
+            if (p == 0) break; 
+            curr_conditional = curr_conditional->next_in_list; 
+            if (curr_conditional == nullptr) return; 
+            curr_pipeline = curr_conditional->child_pipeline; 
+            curr_command = curr_pipeline->child_command; 
+        }
         
         if (run && curr_command->args.size() != 0)
         {
@@ -199,7 +211,7 @@ void run_list(list* ls) {
                 com = com->next_in_pipeline; 
             }
 
-            if (run)
+            if (pid != -1)
             {
                 // wait for last command to finish
                 pid_t exited_pid = waitpid(pid, &status, 0); 
@@ -216,12 +228,15 @@ void run_list(list* ls) {
 
             if (curr_pipeline == nullptr)
             {
+                // reached the end of current conditional
+                if (p == 0) _exit(0); 
+
                 // go to next conditional
                 curr_conditional = curr_conditional->next_in_list; 
                 if (curr_conditional) curr_pipeline = curr_conditional->child_pipeline; 
 
                 // reset conditional
-                run = 1; 
+                run = true; 
                 status = 0; 
             }
 
@@ -255,29 +270,28 @@ list* parse_line(const char* s) {
     curr_conditional->child_pipeline = curr_pipeline; 
     curr_pipeline->child_command = curr_command; 
 
-    int con_n = 1, pip_n = 1, com_n = 1; 
-
     for (auto it = parser.begin(); it != parser.end(); ++it) {
         switch (it.type())
         {
+            case TYPE_BACKGROUND:
+                curr_conditional->is_background = true; 
+                [[fallthrough]]; 
+            
             case TYPE_SEQUENCE: 
                 // new conditional
                 prev_conditional = curr_conditional; 
                 curr_conditional = new conditional; 
                 prev_conditional->next_in_list = curr_conditional; 
-                con_n++; 
 
                 // new pipeline
                 prev_pipeline = nullptr; 
                 curr_pipeline = new pipeline; 
                 curr_conditional->child_pipeline = curr_pipeline; 
-                pip_n++; 
 
                 // new command
                 prev_command = nullptr; 
                 curr_command = new command; 
                 curr_pipeline->child_command = curr_command; 
-                com_n++; 
                 break; 
 
             case TYPE_AND: case TYPE_OR: 
@@ -286,13 +300,11 @@ list* parse_line(const char* s) {
                 curr_pipeline = new pipeline; 
                 prev_pipeline->next_in_conditional = curr_pipeline; 
                 prev_pipeline->next_is_or = (it.type() == TYPE_OR); 
-                pip_n++; 
 
                 // new command
                 prev_command = nullptr; 
                 curr_command = new command; 
                 curr_pipeline->child_command = curr_command; 
-                com_n++; 
                 break; 
 
             case TYPE_PIPE: 
@@ -301,11 +313,10 @@ list* parse_line(const char* s) {
                 curr_command = new command; 
                 curr_command->prev_in_pipeline = prev_command; 
                 prev_command->next_in_pipeline = curr_command; 
-                com_n++; 
                 break; 
 
             default: 
-                curr_command->args.push_back(it.str());  
+                curr_command->args.push_back(it.str()); 
         }
     }
     return ls; 
