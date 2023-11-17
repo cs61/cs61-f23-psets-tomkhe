@@ -52,6 +52,9 @@
 #define PA_IOHIGHMIN    0x00000000C0000000UL // min address of MMIO region 2
 #define PA_IOHIGHEND    0x0000000100000000UL // end address of MMIO region 2
 
+//custom flags
+#define PTE_C           PTE_OS1    // entry must be Copied on write
+
 // Parts of a paged address: page index, page offset
 static inline int pageindex(uintptr_t addr, int level) {
     return (int) (addr >> (PAGEOFFBITS + level * PAGEINDEXBITS)) & 0x1FF;
