@@ -4,6 +4,7 @@
 #include <vector>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <iostream>
 
 // For the love of God
 #undef exit
@@ -17,12 +18,33 @@ struct command {
     std::vector<std::string> args;
     pid_t pid = -1;      // process ID running this command, -1 if none
 
+    // linnked list structure
+    command* prev_in_pipeline = nullptr; 
+    command* next_in_pipeline = nullptr; 
+
+    int read_fd = -1; 
+
     command();
     ~command();
 
     void run();
 };
 
+struct pipeline {
+    command* child_command = nullptr; 
+    pipeline* next_in_conditional = nullptr; 
+    bool next_is_or = false; 
+}; 
+
+struct conditional {
+    pipeline* child_pipeline = nullptr; 
+    conditional* next_in_list = nullptr; 
+    bool is_background = false; 
+}; 
+
+struct list {
+    conditional* child_conditional = nullptr; 
+}; 
 
 // command::command()
 //    This constructor function initializes a `command` structure. You may
@@ -67,7 +89,56 @@ command::~command() {
 void command::run() {
     assert(this->pid == -1);
     assert(this->args.size() > 0);
-    // Your code here!
+
+    int pipefd[2]; 
+    if (this->next_in_pipeline)
+    {
+        // set up pipe
+        int r = pipe(pipefd); 
+        assert(r == 0); 
+    }
+    
+    pid_t p = fork(); 
+    if (p == 0)
+    {
+        // in child process
+        // create char* array as argument
+        char* arr[this->args.size()+1]; 
+        for (int i = 0; (size_t) i < this->args.size(); i++) arr[i] = (char*) this->args[i].c_str(); 
+        arr[this->args.size()] = nullptr; 
+
+        if (this->next_in_pipeline)
+        {
+            close(pipefd[0]); // close read end
+            dup2(pipefd[1], STDOUT_FILENO); // make stdout point to write end of pipe
+            close(pipefd[1]); 
+        }
+
+        if (this->prev_in_pipeline)
+        {
+            assert(read_fd != -1);
+            dup2(this->read_fd, STDIN_FILENO); // make stdin point to read end of pipe
+            close(this->read_fd); 
+        }
+        
+        // run process
+        int r = execvp(arr[0], arr); 
+        if (r == -1) _exit(EXIT_FAILURE); 
+        
+        return; 
+    }else if (p != 0)
+    {
+        // in parent process
+        this->pid = p; 
+
+        if (this->next_in_pipeline)
+        {
+            (this->next_in_pipeline)->read_fd = pipefd[0];      // preserve read end of pipe
+            close(pipefd[1]);                                   // close write end of pipe
+        }
+
+        return; 
+    }else _exit(EXIT_FAILURE); 
 
     fprintf(stderr, "command::run not done yet\n");
 }
@@ -97,9 +168,70 @@ void command::run() {
 //    PART 5: Change the loop to handle background conditional chains.
 //       This may require adding another call to `fork()`!
 
-void run_list(command* c) {
-    c->run();
-    fprintf(stderr, "command::run not done yet\n");
+void run_list(list* ls) {
+    conditional* curr_conditional = ls->child_conditional; 
+    pipeline* curr_pipeline = curr_conditional->child_pipeline; 
+    command* curr_command = curr_pipeline->child_command; 
+    bool run = 1; 
+    int status = 0; 
+
+    while (curr_conditional)
+    {
+        assert(curr_command && curr_pipeline && curr_conditional); 
+        
+        if (run && curr_command->args.size() != 0)
+        {
+            // run current command
+            curr_command->run(); 
+            assert(curr_command->pid != -1); 
+        }
+
+        int pid = curr_command->pid; 
+        curr_command = curr_command->next_in_pipeline; 
+        if (curr_command == nullptr || curr_command->args.size() == 0)
+        {
+            // reached end of current pipeline
+            // close all read ends
+            command* com = curr_pipeline->child_command; 
+            while (com)
+            {
+                if (com->read_fd != -1) close(com->read_fd); 
+                com = com->next_in_pipeline; 
+            }
+
+            if (run)
+            {
+                // wait for last command to finish
+                pid_t exited_pid = waitpid(pid, &status, 0); 
+                if (exited_pid != 0 && exited_pid != pid) break; 
+            }
+
+            // look at conditional
+            run = (curr_pipeline->next_is_or == (WIFEXITED(status) && WEXITSTATUS(status))); 
+            if (WIFEXITED(status) && WEXITSTATUS(status) == 0) run = !curr_pipeline->next_is_or; 
+            else run = curr_pipeline->next_is_or; 
+
+            // try to go to the next pipeline
+            curr_pipeline = curr_pipeline->next_in_conditional; 
+
+            if (curr_pipeline == nullptr)
+            {
+                // go to next conditional
+                curr_conditional = curr_conditional->next_in_list; 
+                if (curr_conditional) curr_pipeline = curr_conditional->child_pipeline; 
+
+                // reset conditional
+                run = 1; 
+                status = 0; 
+            }
+
+            if (curr_pipeline) curr_command = curr_pipeline->child_command; 
+        }
+    }
+
+    if (curr_conditional == nullptr) return; 
+
+    fprintf(stderr, "command::run not done yet\n"); 
 }
 
 
@@ -108,22 +240,103 @@ void run_list(command* c) {
 //    `s` is empty (only spaces). You’ll extend it to handle more token
 //    types.
 
-command* parse_line(const char* s) {
+list* parse_line(const char* s) {
     shell_parser parser(s);
-    // Your code here!
 
-    // Build the command
-    // The handout code treats every token as a normal command word.
-    // You'll add code to handle operators.
-    command* c = nullptr;
-    for (shell_token_iterator it = parser.begin(); it != parser.end(); ++it) {
-        if (!c) {
-            c = new command;
+    list* ls = new list; 
+    conditional* prev_conditional = nullptr; 
+    conditional* curr_conditional = new conditional; 
+    pipeline* prev_pipeline = nullptr; 
+    pipeline* curr_pipeline = new pipeline; 
+    command* prev_command = nullptr; 
+    command* curr_command = new command; 
+
+    ls->child_conditional = curr_conditional; 
+    curr_conditional->child_pipeline = curr_pipeline; 
+    curr_pipeline->child_command = curr_command; 
+
+    int con_n = 1, pip_n = 1, com_n = 1; 
+
+    for (auto it = parser.begin(); it != parser.end(); ++it) {
+        switch (it.type())
+        {
+            case TYPE_SEQUENCE: 
+                // new conditional
+                prev_conditional = curr_conditional; 
+                curr_conditional = new conditional; 
+                prev_conditional->next_in_list = curr_conditional; 
+                con_n++; 
+
+                // new pipeline
+                prev_pipeline = nullptr; 
+                curr_pipeline = new pipeline; 
+                curr_conditional->child_pipeline = curr_pipeline; 
+                pip_n++; 
+
+                // new command
+                prev_command = nullptr; 
+                curr_command = new command; 
+                curr_pipeline->child_command = curr_command; 
+                com_n++; 
+                break; 
+
+            case TYPE_AND: case TYPE_OR: 
+                // new pipeline
+                prev_pipeline = curr_pipeline; 
+                curr_pipeline = new pipeline; 
+                prev_pipeline->next_in_conditional = curr_pipeline; 
+                prev_pipeline->next_is_or = (it.type() == TYPE_OR); 
+                pip_n++; 
+
+                // new command
+                prev_command = nullptr; 
+                curr_command = new command; 
+                curr_pipeline->child_command = curr_command; 
+                com_n++; 
+                break; 
+
+            case TYPE_PIPE: 
+                // new command
+                prev_command = curr_command; 
+                curr_command = new command; 
+                curr_command->prev_in_pipeline = prev_command; 
+                prev_command->next_in_pipeline = curr_command; 
+                com_n++; 
+                break; 
+
+            default: 
+                curr_command->args.push_back(it.str());  
         }
-        c->args.push_back(it.str());
     }
-    return c;
+    return ls; 
 }
+
+void cleanup(list* ls)
+{
+    conditional* curr_conditional = ls->child_conditional; 
+    while (curr_conditional != nullptr)
+    {
+        pipeline* curr_pipeline = curr_conditional->child_pipeline; 
+        while (curr_pipeline != nullptr)
+        {
+            command* curr_command = curr_pipeline->child_command; 
+            while (curr_command != nullptr)
+            {
+                command* temp = curr_command->next_in_pipeline; 
+                delete curr_command; 
+                curr_command = temp; 
+            }
+            pipeline* temp = curr_pipeline->next_in_conditional; 
+            delete curr_pipeline; 
+            curr_pipeline = temp; 
+        }
+        conditional* temp = curr_conditional->next_in_list; 
+        delete curr_conditional; 
+        curr_conditional = temp; 
+    }
+    delete ls; 
+}
+
 
 
 int main(int argc, char* argv[]) {
@@ -180,9 +393,9 @@ int main(int argc, char* argv[]) {
         // If a complete command line has been provided, run it
         bufpos = strlen(buf);
         if (bufpos == BUFSIZ - 1 || (bufpos > 0 && buf[bufpos - 1] == '\n')) {
-            if (command* c = parse_line(buf)) {
-                run_list(c);
-                delete c;
+            if (list* ls = parse_line(buf)) {
+                run_list(ls);
+                cleanup(ls); 
             }
             bufpos = 0;
             needprompt = 1;

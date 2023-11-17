@@ -1,0 +1,8 @@
+  COMPILE sh61.cc
+  LINK sh61 
+perl check.pl  COND12
+Test COND12: FAILED in 0.008 sec
+    Checking || conditional chains with output
+    Command  `true || echo no || echo no || echo no || echo no && echo yes`
+    Expected `yes`
+    Got      `conditional: 178777824; pipeline: 178777856; command: 178777888; conditional...`
