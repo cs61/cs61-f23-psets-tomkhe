@@ -23,6 +23,10 @@ struct command {
     command* next_in_pipeline = nullptr; 
 
     int read_fd = -1; 
+    bool is_cd = false; 
+
+    std::string redirection[3] = {"", "", ""}; 
+    int perms[3] = {O_RDONLY, O_WRONLY | O_CREAT | O_TRUNC, O_WRONLY | O_CREAT | O_TRUNC}; 
 
     command();
     ~command();
@@ -97,6 +101,13 @@ void command::run() {
         int r = pipe(pipefd); 
         assert(r == 0); 
     }
+
+    if (this->is_cd)
+    {
+        // cd command
+        (void) (chdir(this->args[1].c_str())+1);       // ignore return value; look at errno after exit instead
+        return; 
+    }
     
     pid_t p = fork(); 
     if (p == 0)
@@ -120,11 +131,20 @@ void command::run() {
             dup2(this->read_fd, STDIN_FILENO); // make stdin point to read end of pipe
             close(this->read_fd); 
         }
-        
+
+        for (int i = 0; i < 3; i++)
+        {
+            if (this->redirection[i].empty()) continue; 
+            int fd = open(this->redirection[i].c_str(), perms[i], S_IRWXU); 
+            if (fd == -1) goto error; 
+            dup2(fd, i); 
+            close(fd); 
+        }
+
         // run process
         int r = execvp(arr[0], arr); 
-        if (r == -1) _exit(EXIT_FAILURE); 
-        
+        if (r == -1) goto error; 
+
         return; 
     }else if (p != 0)
     {
@@ -141,6 +161,10 @@ void command::run() {
     }else _exit(EXIT_FAILURE); 
 
     fprintf(stderr, "command::run not done yet\n");
+
+error: 
+    fprintf(stderr, "%s\n", strerror(errno)); 
+    _exit(EXIT_FAILURE); 
 }
 
 
@@ -195,7 +219,12 @@ void run_list(list* ls) {
         {
             // run current command
             curr_command->run(); 
-            assert(curr_command->pid != -1); 
+            if (curr_command->is_cd)
+            {
+                // this means the command was a cd
+                // if errno is zero, cd succeeded
+                status = (errno != 0); 
+            }
         }
 
         int pid = curr_command->pid; 
@@ -213,13 +242,12 @@ void run_list(list* ls) {
 
             if (pid != -1)
             {
-                // wait for last command to finish
+                // wait for all commands to finish
                 pid_t exited_pid = waitpid(pid, &status, 0); 
                 if (exited_pid != 0 && exited_pid != pid) break; 
             }
 
             // look at conditional
-            run = (curr_pipeline->next_is_or == (WIFEXITED(status) && WEXITSTATUS(status))); 
             if (WIFEXITED(status) && WEXITSTATUS(status) == 0) run = !curr_pipeline->next_is_or; 
             else run = curr_pipeline->next_is_or; 
 
@@ -314,8 +342,25 @@ list* parse_line(const char* s) {
                 curr_command->prev_in_pipeline = prev_command; 
                 prev_command->next_in_pipeline = curr_command; 
                 break; 
+            
+            case TYPE_REDIRECT_OP: 
+                if (it.str() == "<")
+                {
+                    ++it; 
+                    curr_command->redirection[STDIN_FILENO] = it.str(); 
+                }else if (it.str() == ">")
+                {
+                    ++it; 
+                    curr_command->redirection[STDOUT_FILENO] = it.str(); 
+                }else
+                {
+                    ++it; 
+                    curr_command->redirection[STDERR_FILENO] = it.str(); 
+                }
+                break; 
 
             default: 
+                if (it.str() == "cd") curr_command->is_cd = true; 
                 curr_command->args.push_back(it.str()); 
         }
     }
@@ -413,7 +458,7 @@ int main(int argc, char* argv[]) {
         }
 
         // Handle zombie processes and/or interrupt requests
-        // Your code here!
+        while (waitpid(-1, nullptr, WNOHANG) > 0); 
     }
 
     return 0;
