@@ -296,17 +296,19 @@ void exception(regstate* regs) {
         const char* problem = regs->reg_errcode & PTE_P
                 ? "protection problem" : "missing page";
 
-        if ((regs->reg_errcode & PTE_C) && (regs->reg_errcode & PTE_W) && addr >= PROC_START_ADDR)
+        if ((regs->reg_errcode & PTE_W) && 
+        addr >= PROC_START_ADDR)
         {
             //find the va that maps to addr
             vmiter it(current->pagetable, round_down(addr, PAGESIZE));
 
             //check if it's a COW page
-            if (it.user() && (it.perm() & PTE_C))
+            if (it.perm() & (PTE_C | PTE_P))
             {
                 //tried to write to a COW page
-                //first check if refcount is 1
                 assert(!it.writable()); 
+
+                //first check if refcount is 1
                 if (physpages[it.pa() / PAGESIZE].refcount == 1)
                 {
                     int r = it.try_map(it.pa(), (it.perm() | PTE_W) & ~PTE_C); 
@@ -324,17 +326,19 @@ void exception(regstate* regs) {
                     }
                     
                     //create new mapping
+                    void* old_addr = it.kptr(); 
                     int r = it.try_map(paddr, (it.perm() | PTE_W) & ~PTE_C); 
                     if (r < 0)
                     {
                         kfree(paddr); 
                         syscall_exit();
                     }
+                    assert(it.writable());
 
                     //copy over data
-                    memcpy(paddr, it.kptr(), PAGESIZE); 
+                    memcpy(paddr, old_addr, PAGESIZE); 
 
-                    kfree(it.kptr()); 
+                    kfree(old_addr); 
                 }
                 break; 
             }
@@ -488,7 +492,7 @@ int syscall_fork() {
     vmiter it(cpt, 0); 
     for (; pit.va() < MEMSIZE_VIRTUAL; pit += PAGESIZE, it += PAGESIZE)
     {
-        if (it.va() < PROC_START_ADDR || pit.pa() == CONSOLE_ADDR)
+        if (it.va() < PROC_START_ADDR || it.va() == CONSOLE_ADDR)
         {
             //just copy over
             int r = it.try_map(pit.pa(), pit.perm()); 
@@ -500,7 +504,8 @@ int syscall_fork() {
         }else if (pit.user())
         {
             //share memory
-            int perm = (pit.perm() & ~PTE_W) | PTE_C; 
+            int perm = pit.perm() & ~PTE_W; 
+            if (pit.writable()) perm |= PTE_C; 
 
             int r = it.try_map(pit.pa(), perm); 
             if (r < 0)
@@ -509,6 +514,7 @@ int syscall_fork() {
                 return -1; 
             }
 
+            // mark COW for parent too
             r = pit.try_map(pit.pa(), perm); 
             assert(r == 0); 
             physpages[(uintptr_t) pit.pa() / PAGESIZE].refcount++; 
@@ -525,9 +531,9 @@ int syscall_fork() {
 
 int syscall_exit()
 {
+    free_everything(current->pagetable); 
     ptable[current->pid].state = P_FREE; 
     ptable[current->pid].pagetable = nullptr; 
-    free_everything(current->pagetable); 
     schedule(); 
 }
 
