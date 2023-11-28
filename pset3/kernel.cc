@@ -297,7 +297,8 @@ void exception(regstate* regs) {
                 ? "protection problem" : "missing page";
 
         if ((regs->reg_errcode & PTE_W) && 
-        addr >= PROC_START_ADDR)
+        addr >= PROC_START_ADDR &&
+        addr != CONSOLE_ADDR)
         {
             //find the va that maps to addr
             vmiter it(current->pagetable, round_down(addr, PAGESIZE));
@@ -314,7 +315,7 @@ void exception(regstate* regs) {
                     int r = it.try_map(it.pa(), (it.perm() | PTE_W) & ~PTE_C); 
                     if (r < 0)
                     {
-                        syscall_exit(); 
+                        syscall_exit();
                     }
                 }else
                 {
