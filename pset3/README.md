@@ -14,7 +14,8 @@ Extra credit attempted (if any)
 -------------------------------
 - Copy-on-write fork
 
-Additional extra credit in this commit: 
+**Additional extra credit in this commit:**
 - `kill` system call
 - `sleep` system call
+
 Test file is called `p-sleepkill`, in which a parent forks a child, sleeps for a bit, and then kills the child once it runs out of memory. It can be accessed by pressing the `s` key after `make run`. 
