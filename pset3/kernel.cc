@@ -45,6 +45,8 @@ void memshow();
 int syscall_page_alloc(uintptr_t addr);
 int syscall_fork();
 int syscall_exit();
+int syscall_kill(int pid);
+int syscall_sleep(int time);
 
 
 // kernel_start(command)
@@ -427,6 +429,12 @@ uintptr_t syscall(regstate* regs) {
 
     case SYSCALL_EXIT:
         return syscall_exit();
+    
+    case SYSCALL_KILL:
+        return syscall_kill(current->regs.reg_rdi); 
+    
+    case SYSCALL_SLEEP:
+        return syscall_sleep(current->regs.reg_rdi);
 
     default:
         proc_panic(current, "Unhandled system call %ld (pid=%d, rip=%p)!\n",
@@ -538,6 +546,21 @@ int syscall_exit()
     schedule(); 
 }
 
+int syscall_kill(int pid)
+{
+    if (pid < 0 || pid > 16 || ptable[pid].state != P_RUNNABLE) return -1; 
+    free_everything(ptable[pid].pagetable); 
+    ptable[pid].state = P_FREE; 
+    ptable[pid].pagetable = nullptr; 
+    return 0; 
+}
+
+int syscall_sleep(int time)
+{
+    current->wake_up = ticks + (time / (1000 / HZ)); 
+    schedule(); 
+}
+
 // schedule
 //    Pick the next process to run and then run it.
 //    If there are no runnable processes, spins forever.
@@ -546,7 +569,7 @@ void schedule() {
     pid_t pid = current->pid;
     for (unsigned spins = 1; true; ++spins) {
         pid = (pid + 1) % PID_MAX;
-        if (ptable[pid].state == P_RUNNABLE) {
+        if (ptable[pid].state == P_RUNNABLE && ticks >= ptable[pid].wake_up) {
             run(&ptable[pid]);
         }
 

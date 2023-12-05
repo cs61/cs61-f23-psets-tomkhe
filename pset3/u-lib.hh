@@ -103,6 +103,16 @@ inline int sys_page_alloc(void* addr) {
     return make_syscall(SYSCALL_PAGE_ALLOC, (uintptr_t) addr);
 }
 
+inline int sys_kill(int pid)
+{
+    return make_syscall(SYSCALL_KILL, pid); 
+}
+
+inline int sys_sleep(int time)
+{
+    return make_syscall(SYSCALL_SLEEP, time); 
+}
+
 // sys_fork()
 //    Fork the current process. On success, returns the child's process ID to
 //    the parent, and returns 0 to the child. On failure, returns a negative
