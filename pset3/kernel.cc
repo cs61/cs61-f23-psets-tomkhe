@@ -47,6 +47,8 @@ int syscall_fork();
 int syscall_exit();
 int syscall_kill(int pid);
 int syscall_sleep(int time);
+int syscall_mmap(uintptr_t addr, size_t len, int flags);
+int syscall_munmap(uintptr_t addr, size_t len);
 
 
 // kernel_start(command)
@@ -390,8 +392,12 @@ void exception(regstate* regs) {
 
 uintptr_t syscall(regstate* regs) {
     // Copy the saved registers into the `current` process descriptor.
-    current->regs = *regs;
-    regs = &current->regs;
+    if (regs->reg_cs & 0x3 != 0)
+    {
+        // in user mode
+        current->regs = *regs;
+        regs = &current->regs;
+    }
 
     // It can be useful to log events using `log_printf`.
     // Events logged this way are stored in the host's `log.txt` file.
@@ -435,6 +441,12 @@ uintptr_t syscall(regstate* regs) {
     
     case SYSCALL_SLEEP:
         return syscall_sleep(current->regs.reg_rdi);
+    
+    case SYSCALL_MMAP:
+        return syscall_mmap(current->regs.reg_rdi, current->regs.reg_rsi, current->regs.reg_rdx); 
+    
+    case SYSCALL_MUNMAP:
+        return syscall_munmap(current->regs.reg_rdi, current->regs.reg_rsi); 
 
     default:
         proc_panic(current, "Unhandled system call %ld (pid=%d, rip=%p)!\n",
@@ -465,19 +477,97 @@ int syscall_page_alloc(uintptr_t addr) {
     //check alignment and other conditions
     if (addr % PAGESIZE || addr < PROC_START_ADDR || addr >= MEMSIZE_VIRTUAL) return -1; 
 
-    //assign new page in heap
-    void* paddr = kalloc(PAGESIZE); 
-    if (paddr == nullptr) return -1; 
+    addr = syscall_mmap(addr, PAGESIZE, PTE_P | PTE_W | PTE_U); 
+    if (addr == 0) return -1; 
+    else return 0; 
+}
 
-    int r = vmiter(current->pagetable, addr).try_map(paddr, PTE_P | PTE_W | PTE_U); 
-    if (r < 0)
+uintptr_t find_free_vmemory(size_t len)
+{
+    int npages = len / PAGESIZE; 
+    int running_total = 0; 
+    uintptr_t addr = 0; 
+    for (vmiter it(current->pagetable, PROC_START_ADDR); it.va() < MEMSIZE_VIRTUAL; it += PAGESIZE)
     {
-        kfree(paddr); 
-        return -1; 
+        if (it.present())
+        {
+            running_total = 0; 
+            addr = 0; 
+        }else
+        {
+            running_total++; 
+            if (running_total == 1) addr = it.va(); 
+
+            assert(addr != 0); 
+            if (running_total == npages) break; 
+        }
+    }
+    return addr; 
+}
+
+int syscall_mmap(uintptr_t addr, size_t len, int flags)
+{
+    if (len == 0) return 0; 
+
+    // try to find a starting virtual address such that the next len addresses are unmapped
+    if (addr == 0 || addr + len > MEMSIZE_VIRTUAL || addr >= MEMSIZE_VIRTUAL || addr % PAGESIZE || addr < PROC_START_ADDR) addr = find_free_vmemory(len); 
+    else
+    {
+        // check if the entire chunk is unmapped
+        for (vmiter it(current->pagetable, addr); it.va() < addr + len; it += PAGESIZE)
+        {
+            if (it.present())
+            {
+                addr = find_free_vmemory(len); 
+                break; 
+            }
+        }
+    }
+    if (addr == 0) return 0; 
+
+    // create new mappings with correct permissions
+    for (vmiter it (current->pagetable, addr); it.va() < addr + len; it += PAGESIZE)
+    {
+        //assign new page in heap
+        void* paddr = kalloc(PAGESIZE); 
+        if (paddr == nullptr)
+        {
+            // need to remove all previous mappings
+            for (vmiter it2 (current->pagetable, addr); it2.va() < it.va(); it2 += PAGESIZE)
+            {
+                kfree(it2.kptr()); 
+                it2.map(it2.kptr(), 0); 
+            }
+            return 0; 
+        }
+
+        int r = vmiter(current->pagetable, addr).try_map(paddr, flags); 
+        if (r < 0)
+        {
+            // need to remove all previous mappings
+            for (vmiter it2 (current->pagetable, addr); it2.va() < it.va(); it2 += PAGESIZE)
+            {
+                kfree(it2.kptr()); 
+                it2.map(it2.kptr(), 0); 
+            }
+            kfree(paddr); 
+            return 0; 
+        }
+        memset((void*) paddr, 0, PAGESIZE);
     }
 
-    memset((void*) paddr, 0, PAGESIZE);
-    return 0;
+    // all mappings successful
+    return addr; 
+}
+
+int syscall_munmap(uintptr_t addr, size_t len)
+{
+    for (vmiter it(current->pagetable, addr); it.va() < addr + len && it.va() < MEMSIZE_VIRTUAL; it += PAGESIZE)
+    {
+        if (!it.user() || !it.present()) continue; 
+        it.map(it.kptr(), 0); 
+    }
+    return 0; 
 }
 
 int syscall_fork() {

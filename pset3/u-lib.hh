@@ -113,6 +113,16 @@ inline int sys_sleep(int time)
     return make_syscall(SYSCALL_SLEEP, time); 
 }
 
+inline void* sys_mmap(void* addr, size_t len, int flags)
+{
+    return (void*) make_syscall(SYSCALL_MMAP, (uintptr_t)addr, len, flags); 
+}
+
+inline int sys_munmap(void* addr, size_t len)
+{
+    return make_syscall(SYSCALL_MUNMAP, (uintptr_t) addr, len); 
+}
+
 // sys_fork()
 //    Fork the current process. On success, returns the child's process ID to
 //    the parent, and returns 0 to the child. On failure, returns a negative
