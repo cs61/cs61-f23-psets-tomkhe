@@ -392,12 +392,8 @@ void exception(regstate* regs) {
 
 uintptr_t syscall(regstate* regs) {
     // Copy the saved registers into the `current` process descriptor.
-    if (regs->reg_cs & 0x3 != 0)
-    {
-        // in user mode
-        current->regs = *regs;
-        regs = &current->regs;
-    }
+    current->regs = *regs;
+    regs = &current->regs;
 
     // It can be useful to log events using `log_printf`.
     // Events logged this way are stored in the host's `log.txt` file.
