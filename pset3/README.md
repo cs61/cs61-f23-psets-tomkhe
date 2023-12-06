@@ -23,4 +23,4 @@ Extra credit attempted (if any)
 - `munmap` system call: removes mapping for a given region
 - replaced implementation of `sys_page_alloc` with `sys_mmap`
 
-`p-map` test file: 
+`p-map` test file: parent forks 3 children, then each process iteratively calls `sys_mmap(nullptr, PAGESIZE*rand_factor, PTE_PWU)` to get page mappings in chunks (of pseudo-random size). `sys_mmap(heap_top, PAGESIZE, PTE_PWU) == nullptr)` is also called to test `mmap` starting at specified address. After they run of memory, the processes call `sys_munmap(heap_bottom, heap_top - heap_bottom)` to unmap all heap memory, then do nothing forever. 

@@ -5,32 +5,78 @@
 
 extern uint8_t end[];
 
+uint8_t* heap_top;
+uint8_t* stack_bottom;
+
+// Ensure kernel can load multi-page programs by including some big objects.
+struct test_struct {
+    int field1;
+    unsigned char buf[4096];
+    int field2;
+};
+const test_struct test1 = {61, {0}, 6161};
+test_struct test2;
+
 void process_main() {
-    // parent
+    pid_t initial_pid = sys_getpid();
+    assert(initial_pid > 0 && initial_pid < PID_MAX);
+    test2.field1 = 61;
+    assert(test1.field1 == 61 && test1.field2 == 6161);
+
+    // Fork a total of three new copies, checking `fork` return values.
+    pid_t p1 = sys_fork();
+    assert(p1 >= 0 && p1 < PID_MAX);
+    pid_t intermediate_pid = sys_getpid();
+    if (p1 == 0) {
+        assert(intermediate_pid != initial_pid);
+    } else {
+        assert(intermediate_pid == initial_pid && p1 != initial_pid);
+    }
+
+    pid_t p2 = sys_fork();
+    assert(p2 >= 0 && p2 < PID_MAX);
+    pid_t final_pid = sys_getpid();
+    if (p2 == 0) {
+        assert(final_pid != initial_pid && final_pid != intermediate_pid);
+    } else {
+        assert(p2 != p1 && p2 != intermediate_pid && p2 != initial_pid);
+        assert(final_pid == intermediate_pid);
+    }
+
+    // Check that multi-page segments can be loaded.
+    assert(test1.field1 == 61 && test1.field2 == 6161);
+    assert(test2.field1 == 61);
+    test2.field2 = 61 + final_pid;
+    sys_yield();
+    assert(test2.field2 == 61 + final_pid);
+
+    // The rest of this code is like p-allocator.c.
+
     pid_t p = sys_getpid();
     srand(p);
 
-    // The heap starts on the page right after the 'end' symbol,
-    // whose address is the first address not allocated to process code
-    // or data.
-    uint8_t* heap_top = (uint8_t*) round_up((uintptr_t) end, PAGESIZE);
+    uint8_t* heap_bottom = (uint8_t*) round_up((uintptr_t) end, PAGESIZE);
+    heap_top = heap_bottom;
+    stack_bottom = (uint8_t*) round_down((uintptr_t) rdrsp() - 1, PAGESIZE);
 
-    // The bottom of the stack is the first address on the current
-    // stack page (this process never needs more than one stack page).
-    uint8_t* stack_bottom = (uint8_t*) round_down((uintptr_t) rdrsp() - 1, PAGESIZE);
-
-    // Allocate heap pages until (1) hit the stack (out of address space)
-    // or (2) allocation fails (out of physical memory).
     while (heap_top != stack_bottom) {
-        if (rand(0, ALLOC_SLOWDOWN - 1) < p) {
-            if (sys_page_alloc(heap_top) < 0) {
-                break;
+        int x = rand(0, ALLOC_SLOWDOWN - 1);
+        if (x < p) {
+            int rand_factor = rand(0, 10); 
+            if (sys_mmap(nullptr, PAGESIZE*rand_factor, PTE_PWU) == nullptr) { // test the nullptr functionality
+                // check if it's actually out of memory or if not enough memory
+                if (sys_mmap(heap_top, PAGESIZE, PTE_PWU) == nullptr) // test explicit address functionality
+                {
+                    // fully out of memory
+                    break; 
+                }
+                sys_munmap(heap_top, PAGESIZE); 
+                continue;
             }
-            sys_sleep(10);
             // check that the page starts out all zero
             for (unsigned long* l = (unsigned long*) heap_top;
-                l != (unsigned long*) (heap_top + PAGESIZE);
-                ++l) {
+                 l != (unsigned long*) (heap_top + PAGESIZE);
+                 ++l) {
                 assert(*l == 0);
             }
             // check we can write to new page
@@ -38,12 +84,20 @@ void process_main() {
             // check we can write to console
             console[CPOS(24, 79)] = p;
             // update `heap_top`
-            heap_top += PAGESIZE;
+            heap_top += PAGESIZE*rand_factor;
+        } else if (x < p + 1 && heap_bottom < heap_top) {
+            // ensure we can write to any previously-allocated page
+            uintptr_t addr = rand((uintptr_t) heap_bottom,
+                                  (uintptr_t) heap_top - 1);
+            *((char*) addr) = p;
         }
         sys_yield();
     }
 
-    // After running out of memory, kill the child then do nothing forever
+    // After running out of memory, first unmap everything
+    sys_munmap(heap_bottom, heap_top - heap_bottom); 
+
+    // Then do nothing forever
     while (true) {
         sys_yield();
     }

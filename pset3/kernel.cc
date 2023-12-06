@@ -541,7 +541,7 @@ int syscall_mmap(uintptr_t addr, size_t len, int flags)
             return 0; 
         }
 
-        int r = vmiter(current->pagetable, addr).try_map(paddr, flags); 
+        int r = vmiter(current->pagetable, it.va()).try_map(paddr, flags); 
         if (r < 0)
         {
             // need to remove all previous mappings
@@ -565,6 +565,7 @@ int syscall_munmap(uintptr_t addr, size_t len)
     for (vmiter it(current->pagetable, addr); it.va() < addr + len && it.va() < MEMSIZE_VIRTUAL; it += PAGESIZE)
     {
         if (!it.user() || !it.present()) continue; 
+        kfree(it.kptr());
         it.map(it.kptr(), 0); 
     }
     return 0; 
