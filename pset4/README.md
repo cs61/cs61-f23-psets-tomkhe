@@ -8,3 +8,4 @@ Grading notes (if any)
 
 Extra credit attempted (if any)
 -------------------------------
+- Fully associative cache for reads and writes with LRU eviction
