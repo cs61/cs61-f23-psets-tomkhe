@@ -29,6 +29,7 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz);
 ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz);
 
 int io61_flush(io61_file* f);
+int io61_slot_flush(io61_file* f, int slot); 
 
 int fd_open_check(const char* filename, int mode);
 FILE* stdio_open_check(const char* filename, int mode);
