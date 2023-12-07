@@ -25,7 +25,7 @@ struct io61_cache {
 };
 
 struct io61_file {
-    static const off_t slots = 1 << 10; 
+    static const off_t slots = 32; 
 
     int fd = -1;                                // file descriptor
     int mode;                                   // open mode (O_RDONLY or O_WRONLY)
@@ -35,9 +35,13 @@ struct io61_file {
     std::map<long long, int> access_times;      // tracks most recent access of each cache block
     std::map<int, long long> helper;            // used to get O(log n) LRU implementation
     std::map<int, int> offsets;                 // track offsets
-
     off_t size;                         // file size
-    off_t pos_tag = 0;                  // file offset of cache (in read, this is the file offset of next char to be read)
+    char* map = nullptr;                // memory-mapped IO
+    bool is_seq = true;                 // if access pattern is sequential
+
+    off_t tag = 0;              // file offset of first byte of cache data (0 when file opened)
+    off_t end_tag = 0;          // file offset one past last byte of cached data (0 when file opened)
+    off_t pos_tag = 0;          // file offset of cache (in read, this is the file offset of next char to be read)
 };
 
 // io61_fdopen(fd, mode)
@@ -178,13 +182,35 @@ int get_slot(io61_file* f)
 //    which equals -1, on end of file or error.
 
 int io61_readc(io61_file* f) {
-    int slot = get_slot(f); 
-    if (slot == -1 || f->arr[slot].end_tag == f->arr[slot].tag) return -1; 
-    update_access_time(f, slot); 
+    if (f->map == nullptr)
+    {
+        f->map = (char*) mmap(nullptr, f->size, PROT_READ, MAP_PRIVATE, f->fd, 0); 
+        if (f->map != MAP_FAILED)
+        {
+            f->tag = 0; 
+            f->end_tag = f->size; 
+            if (f->is_seq) posix_fadvise(f->fd, 0, f->size, POSIX_FADV_SEQUENTIAL);
+        }
+    }
 
-    unsigned char ch = f->arr[slot].buf[f->pos_tag - f->arr[slot].tag]; 
-    f->pos_tag++; 
-    return ch; 
+    if (f->map == MAP_FAILED)
+    {
+        // non-mappable file
+        int slot = get_slot(f); 
+        if (slot == -1 || f->arr[slot].end_tag == f->arr[slot].tag) return -1; 
+        update_access_time(f, slot); 
+
+        unsigned char ch = f->arr[slot].buf[f->pos_tag - f->arr[slot].tag]; 
+        f->pos_tag++; 
+        return ch; 
+    }
+
+    // mappable file
+    if (f->pos_tag < f->end_tag)
+    {
+        f->pos_tag++; 
+        return (unsigned char) f->map[f->pos_tag-1]; 
+    }else return -1; 
 }
 
 
@@ -198,7 +224,7 @@ int io61_readc(io61_file* f) {
 //    if end-of-file or error is encountered before all `sz` bytes are read.
 //    This is called a Ã¢â‚¬Å“short read.Ã¢â‚¬Â
 
-ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
+ssize_t io61_read_cache(io61_file* f, unsigned char* buf, size_t sz) {
     int slot = get_slot(f); 
     if (slot == -1) return -1; 
 
@@ -226,6 +252,27 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
     } else {
         return -1;
     }
+}
+
+ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
+    if (f->map == nullptr)
+    {
+        f->map = (char*) mmap(nullptr, f->size, PROT_READ, MAP_PRIVATE, f->fd, 0); 
+        if (f->map != MAP_FAILED)
+        {
+            f->tag = 0; 
+            f->end_tag = f->size; 
+            if (f->is_seq) posix_fadvise(f->fd, 0, f->size, POSIX_FADV_SEQUENTIAL);
+        }
+    }
+
+    if (f->map == MAP_FAILED) return io61_read_cache(f, buf, sz); 
+
+    // Copy `sz` number of bytes from `f` into `buf`
+    size_t nread = std::min(sz, (size_t) (f->size - f->pos_tag)); 
+    memcpy(buf, &f->map[f->pos_tag], nread); 
+    f->pos_tag += nread; 
+    return nread; 
 }
 
 // io61_flush(f)
@@ -348,26 +395,69 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
 //    Changes the file pointer for file `f` to `pos` bytes into the file.
 //    Returns 0 on success and -1 on failure.
 
-int io61_seek(io61_file* f, off_t pos) {
-    f->pos_tag = pos; 
-
-    // iterate through all cache blocks to see if it's a hit
-    for (int i = 0; i < f->slots; i++)
+int io61_seek(io61_file* f, off_t off) {
+    if (f->mode == O_WRONLY)
     {
-        if (f->arr[i].tag == f->arr[i].end_tag) continue; // empty
-        else if (f->mode == O_RDONLY && f->pos_tag >= f->arr[i].tag && f->pos_tag < f->arr[i].end_tag) return 0; // cache hit!!
-        else if (f->mode == O_WRONLY)
+        // don't consider mapping if write only
+        f->pos_tag = off; 
+
+        // iterate through all cache blocks to see if it's a hit
+        for (int i = 0; i < f->slots; i++)
         {
-            if (f->pos_tag >= f->arr[i].tag && f->pos_tag < f->arr[i].end_tag && f->arr[i].end_tag - f->arr[i].tag <= f->arr[i].bufsize) return 0; 
-            if (f->pos_tag >= f->arr[i].tag && f->pos_tag == f->arr[i].end_tag && f->arr[i].end_tag - f->arr[i].tag < f->arr[i].bufsize) return 0; // if pos_tag is exactly end_tag, and the buffer isn't full, then it's also a cache hit
+            if (f->arr[i].tag == f->arr[i].end_tag) continue; // empty
+            else if (f->mode == O_RDONLY && f->pos_tag >= f->arr[i].tag && f->pos_tag < f->arr[i].end_tag) return 0; // cache hit!!
+            else if (f->mode == O_WRONLY)
+            {
+                if (f->pos_tag >= f->arr[i].tag && f->pos_tag < f->arr[i].end_tag && f->arr[i].end_tag - f->arr[i].tag <= f->arr[i].bufsize) return 0; 
+                if (f->pos_tag >= f->arr[i].tag && f->pos_tag == f->arr[i].end_tag && f->arr[i].end_tag - f->arr[i].tag < f->arr[i].bufsize) return 0; // if pos_tag is exactly end_tag, and the buffer isn't full, then it's also a cache hit
+            }
+        }
+
+        off_t r = lseek(f->fd, off, SEEK_SET);
+        if (r != -1) {
+            return 0;
+        } else {
+            return -1;
         }
     }
 
-    off_t r = lseek(f->fd, (off_t) pos, SEEK_SET);
-    if (r != -1) {
-        return 0;
-    } else {
-        return -1;
+    // see if file is mappable
+    if (f->map == nullptr) f->map = (char*) mmap(nullptr, f->size, PROT_READ, MAP_PRIVATE, f->fd, 0); 
+    
+    if (f->map != nullptr && f->map != MAP_FAILED)
+    {
+        // mappable file
+        // update kernal and IO position
+        off_t r = lseek(f->fd, (off_t) off, SEEK_SET);
+        if (r == -1) return -1; 
+        f->pos_tag = off; 
+        f->tag = 0; 
+        f->end_tag = f->size; 
+        if (f->is_seq) posix_fadvise(f->fd, 0, f->size, POSIX_FADV_NORMAL); 
+        f->is_seq = false; 
+        return 0; 
+    }else {
+        // file not mappable
+        f->pos_tag = off; 
+
+        // iterate through all cache blocks to see if it's a hit
+        for (int i = 0; i < f->slots; i++)
+        {
+            if (f->arr[i].tag == f->arr[i].end_tag) continue; // empty
+            else if (f->mode == O_RDONLY && f->pos_tag >= f->arr[i].tag && f->pos_tag < f->arr[i].end_tag) return 0; // cache hit!!
+            else if (f->mode == O_WRONLY)
+            {
+                if (f->pos_tag >= f->arr[i].tag && f->pos_tag < f->arr[i].end_tag && f->arr[i].end_tag - f->arr[i].tag <= f->arr[i].bufsize) return 0; 
+                if (f->pos_tag >= f->arr[i].tag && f->pos_tag == f->arr[i].end_tag && f->arr[i].end_tag - f->arr[i].tag < f->arr[i].bufsize) return 0; // if pos_tag is exactly end_tag, and the buffer isn't full, then it's also a cache hit
+            }
+        }
+
+        off_t r = lseek(f->fd, off, SEEK_SET);
+        if (r != -1) {
+            return 0;
+        } else {
+            return -1;
+        }
     }
 }
 
@@ -418,3 +508,4 @@ off_t io61_filesize(io61_file* f) {
         return -1;
     }
 }
+
