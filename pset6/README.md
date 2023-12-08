@@ -12,3 +12,4 @@ Grading notes (if any)
 
 Extra credit attempted (if any)
 -------------------------------
+- Integrated PSET 4 I/O, including `mmap`'ed reads and other optimisations like `posix_fadvise`. 

@@ -120,6 +120,7 @@ int io61_readc(io61_file* f) {
         {
             f->tag = 0; 
             f->end_tag = f->size; 
+            if (f->is_seq) posix_fadvise(f->fd, 0, f->size, POSIX_FADV_SEQUENTIAL);
         }
     }
 
@@ -191,6 +192,8 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
         if (f->map != MAP_FAILED)
         {
             f->tag = 0; 
+            f->end_tag = f->size; 
+            if (f->is_seq) posix_fadvise(f->fd, 0, f->size, POSIX_FADV_SEQUENTIAL);
         }
     }
 
@@ -212,18 +215,22 @@ int io61_writec(io61_file* f, int c) {
     // coarse-grained locking to ensure only one process can read from/write to the file at a given time
     std::unique_lock<std::mutex> lg(f->m); 
 
+    io61_check_assertions(f); 
+
     assert(!f->positioned);
-    if (f->pos_tag == f->tag + f->cbufsz) {
-        int r = io61_flush(f);
-        if (r == -1) {
-            return -1;
-        }
+    if (f->end_tag == f->tag + f->cbufsz)
+    {
+        if (io61_flush(f) < 0) return -1; 
     }
-    f->cbuf[f->pos_tag - f->tag] = c;
-    ++f->pos_tag;
-    ++f->end_tag;
-    f->dirty = true;
-    return 0;
+
+    f->cbuf[f->pos_tag - f->tag] = c; 
+
+    f->pos_tag++; 
+    f->end_tag++; 
+    f->dirty = true; 
+
+    io61_check_assertions(f); 
+    return 0; 
 }
 
 
@@ -238,26 +245,33 @@ ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
     // coarse-grained locking to ensure only one process can read from/write to the file at a given time
     std::unique_lock<std::mutex> lg(f->m); 
 
+    io61_check_assertions(f);
     assert(!f->positioned);
-    size_t nwritten = 0;
-    while (nwritten != sz) {
-        if (f->end_tag == f->tag + f->cbufsz) {
-            int r = io61_flush(f);
-            if (r == -1 && nwritten == 0) {
-                return -1;
-            } else if (r == -1) {
-                break;
-            }
+
+    size_t nwritten = 0; 
+    // nwritten = write(f->fd, buf, sz); 
+    while (nwritten < sz)
+    {
+        if (f->end_tag == f->tag + f->cbufsz)
+        {
+            // flush buffer
+            if (io61_flush(f) == -1) break; 
         }
-        size_t nleft = f->tag + f->cbufsz - f->pos_tag;
-        size_t ncopy = std::min(sz - nwritten, nleft);
-        memcpy(&f->cbuf[f->pos_tag - f->tag], &buf[nwritten], ncopy);
-        f->pos_tag += ncopy;
-        f->end_tag += ncopy;
-        f->dirty = true;
-        nwritten += ncopy;
+
+        size_t curr_write = std::min((size_t) (f->cbufsz + f->tag - f->pos_tag), (size_t) (sz-nwritten)); 
+        if (curr_write == 0) break; 
+        memcpy(&f->cbuf[f->pos_tag - f->tag], &buf[nwritten], curr_write); 
+        nwritten += curr_write; 
+        f->pos_tag += curr_write; 
+        f->end_tag += curr_write; 
+        f->dirty = true; 
     }
-    return nwritten;
+
+    if (nwritten != 0 || sz == 0) {
+        return nwritten;
+    } else {
+        return -1;
+    }
 }
 
 
@@ -289,17 +303,51 @@ int io61_flush(io61_file* f) {
 //    Returns 0 on success and -1 on failure.
 
 int io61_seek(io61_file* f, off_t off) {
-    int r = io61_flush(f);
-    if (r == -1) {
-        return -1;
+    io61_check_assertions(f); 
+
+    if (f->mode == O_RDONLY && f->tag <= off && f->end_tag > off)
+    {
+        f->pos_tag = off; 
+        return 0; 
     }
-    off_t roff = lseek(f->fd, off, SEEK_SET);
-    if (roff == -1) {
-        return -1;
+
+    if (f->mode == O_WRONLY) if (io61_flush(f) < 0) return -1; 
+
+    // update kernal and IO position
+    off_t r = lseek(f->fd, (off_t) off, SEEK_SET);
+    if (r == -1) return -1; 
+    f->pos_tag = off; 
+    f->positioned = false; 
+
+    if (f->mode == O_WRONLY)
+    {
+        // don't consider mapping if write only
+        f->tag = f->end_tag = off; 
+        return 0; 
     }
-    f->tag = f->pos_tag = f->end_tag = off;
-    f->positioned = false;
-    return 0;
+
+    // see if file is mappable
+    if (f->map == nullptr)
+    {
+        f->map = (char*) mmap(nullptr, f->size, PROT_READ, MAP_PRIVATE, f->fd, 0); 
+        if (f->map != nullptr)
+        {
+            // mappable file
+            f->tag = 0; 
+            f->end_tag = f->size; 
+        }
+    }
+
+    if (f->map == MAP_FAILED)
+    {
+        // file not mappable
+        f->tag = f->end_tag = off; 
+        return 0; 
+    }
+    
+    if (f->is_seq) posix_fadvise(f->fd, 0, f->size, POSIX_FADV_NORMAL); 
+    f->is_seq = false; 
+    return 0; 
 }
 
 
