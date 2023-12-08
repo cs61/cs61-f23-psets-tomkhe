@@ -6,6 +6,9 @@
 #include <condition_variable>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <iostream>
+#include <map>
+#include <thread>
 
 // io61.cc
 //    YOUR CODE HERE!
@@ -15,20 +18,29 @@
 //    Data structure for io61 file wrappers.
 
 struct io61_file {
-    int fd = -1;     // file descriptor
-    int mode;        // O_RDONLY, O_WRONLY, or O_RDWR
-    bool seekable;   // is this file seekable?
+    static const size_t nchunks = 1 << 15; 
+
+    int fd = -1;                                // file descriptor
+    int mode;                                   // O_RDONLY, O_WRONLY, or O_RDWR
+    bool seekable;                              // is this file seekable?
 
     // Single-slot cache
     static constexpr off_t cbufsz = 8192;
     unsigned char cbuf[cbufsz];
-    off_t tag;       // offset of first character in `cbuf`
-    off_t pos_tag;   // next offset to read or write (non-positioned mode)
-    off_t end_tag;   // offset one past last valid character in `cbuf`
+    off_t tag;                                  // offset of first character in `cbuf`
+    off_t pos_tag;                              // next offset to read or write (non-positioned mode)
+    off_t end_tag;                              // offset one past last valid character in `cbuf`
 
     // Positioned mode
-    bool dirty = false;       // has cache been written?
-    bool positioned = false;  // is cache in positioned mode?
+    std::atomic<bool> dirty = false;            // has cache been written?
+    bool positioned = false;                    // is cache in positioned mode?
+
+    // Synchronisation
+    off_t chunk_sz;                             // how big is each lockable block?
+    std::mutex m;                               // for accessing array containing locked regions
+    std::condition_variable_any cv;             // for blocking
+    int nlocked[nchunks];                       // number of times each chunk is locked
+    std::thread::id owner[nchunks];             // pid of the process that owns the lock
 };
 
 
@@ -52,6 +64,12 @@ io61_file* io61_fdopen(int fd, int mode) {
         f->tag = f->pos_tag = f->end_tag = 0;
     }
     f->dirty = f->positioned = false;
+
+    // calculate chunk size
+    f->chunk_sz = std::max((off_t) (io61_filesize(f) / f->nchunks), (off_t) 16); 
+
+    // initialise nlocked to 0 since initially nothing is locked
+    for (int i = 0; i < (int) f->nchunks; i++) f->nlocked[i] = 0; 
     return f;
 }
 
@@ -76,6 +94,9 @@ int io61_close(io61_file* f) {
 static int io61_fill(io61_file* f);
 
 int io61_readc(io61_file* f) {
+    // coarse-grained locking to ensure only one process can read from/write to the file at a given time
+    std::unique_lock<std::mutex> lg(f->m); 
+
     assert(!f->positioned);
     if (f->pos_tag == f->end_tag) {
         io61_fill(f);
@@ -100,6 +121,9 @@ int io61_readc(io61_file* f) {
 //    This is called a “short read.”
 
 ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
+    // coarse-grained locking to ensure only one process can read from/write to the file at a given time
+    std::unique_lock<std::mutex> lg(f->m); 
+
     assert(!f->positioned);
     size_t nread = 0;
     while (nread != sz) {
@@ -126,6 +150,9 @@ ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
 //    Returns 0 on success and -1 on error.
 
 int io61_writec(io61_file* f, int c) {
+    // coarse-grained locking to ensure only one process can read from/write to the file at a given time
+    std::unique_lock<std::mutex> lg(f->m); 
+
     assert(!f->positioned);
     if (f->pos_tag == f->tag + f->cbufsz) {
         int r = io61_flush(f);
@@ -149,6 +176,9 @@ int io61_writec(io61_file* f, int c) {
 //    before the error occurred.
 
 ssize_t io61_write(io61_file* f, const unsigned char* buf, size_t sz) {
+    // coarse-grained locking to ensure only one process can read from/write to the file at a given time
+    std::unique_lock<std::mutex> lg(f->m); 
+
     assert(!f->positioned);
     size_t nwritten = 0;
     while (nwritten != sz) {
@@ -300,6 +330,9 @@ static int io61_pfill(io61_file* f, off_t off);
 
 ssize_t io61_pread(io61_file* f, unsigned char* buf, size_t sz,
                    off_t off) {
+    // coarse-grained locking to ensure only one process can read from/write to the file at a given time
+    std::unique_lock<std::mutex> lg(f->m); 
+
     if (!f->positioned || off < f->tag || off >= f->end_tag) {
         if (io61_pfill(f, off) == -1) {
             return -1;
@@ -321,6 +354,9 @@ ssize_t io61_pread(io61_file* f, unsigned char* buf, size_t sz,
 
 ssize_t io61_pwrite(io61_file* f, const unsigned char* buf, size_t sz,
                     off_t off) {
+    // coarse-grained locking to ensure only one process can read from/write to the file at a given time
+    std::unique_lock<std::mutex> lg(f->m); 
+
     if (!f->positioned || off < f->tag || off >= f->end_tag) {
         if (io61_pfill(f, off) == -1) {
             return -1;
@@ -355,7 +391,23 @@ static int io61_pfill(io61_file* f, off_t off) {
     return 0;
 }
 
+bool is_overlap(io61_file* f, off_t start, off_t len)
+{
+    for (int i = start / f->chunk_sz; i * f->chunk_sz < start + len; i++)
+        if (f->nlocked[i] && f->owner[i] != std::this_thread::get_id()) return 1; 
+    
+    return 0; 
+}
 
+void lock_region(io61_file* f, off_t start, off_t len)
+{
+    for (int i = start / f->chunk_sz; i * f->chunk_sz < start + len; i++)
+    {
+        assert(f->nlocked[i] == 0 || f->owner[i] == std::this_thread::get_id());
+        f->nlocked[i]++; 
+        f->owner[i] = std::this_thread::get_id(); 
+    }
+}
 
 // FILE LOCKING FUNCTIONS
 
@@ -368,13 +420,20 @@ static int io61_pfill(io61_file* f, off_t off) {
 //    block: if the lock cannot be acquired, it returns -1 right away.
 
 int io61_try_lock(io61_file* f, off_t start, off_t len, int locktype) {
-    (void) f;
     assert(start >= 0 && len >= 0);
     assert(locktype == LOCK_EX || locktype == LOCK_SH);
-    if (len == 0) {
-        return 0;
-    }
-    return 0;
+    if (len == 0) return 0;
+    
+    // try to grab the lock
+    std::unique_lock<std::mutex> lg(f->m); 
+
+    // lock acquired
+    // first check if entire region can be locked
+    if (is_overlap(f, start, len)) return -1; 
+
+    // entire region is free
+    lock_region(f, start, len); 
+    return 0; 
 }
 
 
@@ -390,12 +449,16 @@ int io61_try_lock(io61_file* f, off_t start, off_t len, int locktype) {
 int io61_lock(io61_file* f, off_t start, off_t len, int locktype) {
     assert(start >= 0 && len >= 0);
     assert(locktype == LOCK_EX || locktype == LOCK_SH);
-    if (len == 0) {
-        return 0;
-    }
-    // The handout code polls using `io61_try_lock`.
-    while (io61_try_lock(f, start, len, locktype) != 0) {
-    }
+    if (len == 0) return 0; 
+
+    // try to grab the lock
+    std::unique_lock<std::mutex> lg(f->m); 
+
+    // repeated check if the entire region can be locked
+    while (is_overlap(f, start, len)) f->cv.wait(lg); 
+
+    // entire region is free
+    lock_region(f, start, len); 
     return 0;
 }
 
@@ -405,12 +468,22 @@ int io61_lock(io61_file* f, off_t start, off_t len, int locktype) {
 //    Returns 0 on success and -1 on error.
 
 int io61_unlock(io61_file* f, off_t start, off_t len) {
-    (void) f;
     assert(start >= 0 && len >= 0);
-    if (len == 0) {
-        return 0;
+    if (len == 0) return 0;
+    
+    // try to grab the lock
+    std::unique_lock<std::mutex> lg(f->m); 
+
+    // lock acquired; remove all locks
+    for (int i = start / f->chunk_sz; i * f->chunk_sz < start + len; i++)
+    {
+        assert(f->nlocked[i] && f->owner[i] == std::this_thread::get_id()); 
+        f->nlocked[i]--; 
     }
-    return 0;
+
+    // notify changes
+    f->cv.notify_all(); 
+    return 0; 
 }
 
 
