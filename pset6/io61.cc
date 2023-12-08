@@ -9,6 +9,8 @@
 #include <iostream>
 #include <map>
 #include <thread>
+#include <sys/mman.h> 
+#include <fcntl.h>
 
 // io61.cc
 //    YOUR CODE HERE!
@@ -18,11 +20,10 @@
 //    Data structure for io61 file wrappers.
 
 struct io61_file {
-    static const size_t nchunks = 1 << 15; 
-
     int fd = -1;                                // file descriptor
     int mode;                                   // O_RDONLY, O_WRONLY, or O_RDWR
     bool seekable;                              // is this file seekable?
+    size_t size;
 
     // Single-slot cache
     static constexpr off_t cbufsz = 8192;
@@ -31,17 +32,29 @@ struct io61_file {
     off_t pos_tag;                              // next offset to read or write (non-positioned mode)
     off_t end_tag;                              // offset one past last valid character in `cbuf`
 
+    // Memory-mapped IO
+    char* map = nullptr;                        // memory-mapped IO
+    bool is_seq = true;                         // if access pattern is sequential
+
     // Positioned mode
     std::atomic<bool> dirty = false;            // has cache been written?
     bool positioned = false;                    // is cache in positioned mode?
 
     // Synchronisation
+    static const size_t nchunks = 1 << 15;      // number of chunks the file is divided into
     off_t chunk_sz;                             // how big is each lockable block?
     std::mutex m;                               // for accessing array containing locked regions
     std::condition_variable_any cv;             // for blocking
     int nlocked[nchunks];                       // number of times each chunk is locked
     std::thread::id owner[nchunks];             // pid of the process that owns the lock
 };
+
+void io61_check_assertions(io61_file* f)
+{
+    assert(f->tag <= f->pos_tag && f->pos_tag <= f->end_tag);
+    if (f->map == MAP_FAILED) assert(f->end_tag - f->pos_tag <= f->cbufsz);
+    if (f->mode == O_WRONLY) assert(f->pos_tag == f->end_tag); 
+}
 
 
 // io61_fdopen(fd, mode)
@@ -63,6 +76,7 @@ io61_file* io61_fdopen(int fd, int mode) {
         f->seekable = false;
         f->tag = f->pos_tag = f->end_tag = 0;
     }
+    f->size = io61_filesize(f); 
     f->dirty = f->positioned = false;
 
     // calculate chunk size
@@ -97,16 +111,39 @@ int io61_readc(io61_file* f) {
     // coarse-grained locking to ensure only one process can read from/write to the file at a given time
     std::unique_lock<std::mutex> lg(f->m); 
 
-    assert(!f->positioned);
-    if (f->pos_tag == f->end_tag) {
-        io61_fill(f);
-        if (f->pos_tag == f->end_tag) {
-            return -1;
+    io61_check_assertions(f); 
+
+    if (f->map == nullptr)
+    {
+        f->map = (char*) mmap(nullptr, f->size, PROT_READ, MAP_PRIVATE, f->fd, 0); 
+        if (f->map != MAP_FAILED)
+        {
+            f->tag = 0; 
+            f->end_tag = f->size; 
         }
     }
-    unsigned char ch = f->cbuf[f->pos_tag - f->tag];
-    ++f->pos_tag;
-    return ch;
+
+    if (f->map == MAP_FAILED)
+    {
+        // non-mappable file
+        if (f->pos_tag == f->end_tag)
+        {
+            if(io61_fill(f) < 0 || f->pos_tag == f->end_tag) return -1; 
+        }
+
+        unsigned char ch = f->cbuf[f->pos_tag - f->tag]; 
+        f->pos_tag++; 
+        io61_check_assertions(f); 
+        return ch; 
+    }
+
+    // mappable file
+    if (f->pos_tag < f->end_tag)
+    {
+        f->pos_tag++; 
+        io61_check_assertions(f); 
+        return (unsigned char) f->map[f->pos_tag-1]; 
+    }else return -1; 
 }
 
 
@@ -118,30 +155,52 @@ int io61_readc(io61_file* f) {
 //
 //    Note that the return value might be positive, but less than `sz`,
 //    if end-of-file or error is encountered before all `sz` bytes are read.
-//    This is called a “short read.”
+//    This is called a â€œshort read.â€
+
+ssize_t io61_read_cache(io61_file* f, unsigned char* buf, size_t sz) {
+    io61_check_assertions(f); 
+
+    size_t nread = 0; 
+    while (nread < sz)
+    {
+        if (f->pos_tag == f->end_tag)
+        {
+            //buffer refill
+            if (io61_fill(f) == -1 || f->pos_tag == f->end_tag) break; 
+        }
+        size_t curr_read = std::min((size_t) (f->end_tag - f->pos_tag), (size_t) (sz - nread)); 
+        memcpy(&buf[nread], &f->cbuf[f->pos_tag - f->tag], curr_read); 
+        f->pos_tag += curr_read; 
+        nread += curr_read; 
+    }
+
+    if (nread != 0 || sz == 0 || errno == 0) {
+        return nread;
+    } else {
+        return -1;
+    }
+}
 
 ssize_t io61_read(io61_file* f, unsigned char* buf, size_t sz) {
     // coarse-grained locking to ensure only one process can read from/write to the file at a given time
     std::unique_lock<std::mutex> lg(f->m); 
 
-    assert(!f->positioned);
-    size_t nread = 0;
-    while (nread != sz) {
-        if (f->pos_tag == f->end_tag) {
-            int r = io61_fill(f);
-            if (r == -1 && nread == 0) {
-                return -1;
-            } else if (f->pos_tag == f->end_tag) {
-                break;
-            }
+    if (f->map == nullptr)
+    {
+        f->map = (char*) mmap(nullptr, f->size, PROT_READ, MAP_PRIVATE, f->fd, 0); 
+        if (f->map != MAP_FAILED)
+        {
+            f->tag = 0; 
         }
-        size_t nleft = f->end_tag - f->pos_tag;
-        size_t ncopy = std::min(sz - nread, nleft);
-        memcpy(&buf[nread], &f->cbuf[f->pos_tag - f->tag], ncopy);
-        nread += ncopy;
-        f->pos_tag += ncopy;
     }
-    return nread;
+
+    if (f->map == MAP_FAILED) return io61_read_cache(f, buf, sz); 
+
+    // Copy `sz` number of bytes from `f` into `buf`
+    size_t nread = std::min(sz, (size_t) (f->size - f->pos_tag)); 
+    memcpy(buf, &f->map[f->pos_tag], nread); 
+    f->pos_tag += nread; 
+    return nread; 
 }
 
 
@@ -270,7 +329,7 @@ static int io61_fill(io61_file* f) {
 //    Helper functions for io61_flush.
 
 static int io61_flush_dirty(io61_file* f) {
-    // Called when `f`’s cache is dirty and not positioned.
+    // Called when `f`â€™s cache is dirty and not positioned.
     // Uses `write`; assumes that the initial file position equals `f->tag`.
     off_t flush_tag = f->tag;
     while (flush_tag != f->end_tag) {
@@ -288,7 +347,7 @@ static int io61_flush_dirty(io61_file* f) {
 }
 
 static int io61_flush_dirty_positioned(io61_file* f) {
-    // Called when `f`’s cache is dirty and positioned.
+    // Called when `f`â€™s cache is dirty and positioned.
     // Uses `pwrite`; does not change file position.
     off_t flush_tag = f->tag;
     while (flush_tag != f->end_tag) {
@@ -305,7 +364,7 @@ static int io61_flush_dirty_positioned(io61_file* f) {
 }
 
 static int io61_flush_clean(io61_file* f) {
-    // Called when `f`’s cache is clean.
+    // Called when `f`â€™s cache is clean.
     if (!f->positioned && f->seekable) {
         if (lseek(f->fd, f->pos_tag, SEEK_SET) == -1) {
             return -1;
