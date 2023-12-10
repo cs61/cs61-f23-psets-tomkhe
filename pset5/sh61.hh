@@ -22,6 +22,12 @@
 // some other token types to get you started.
 #define TYPE_LPAREN        7   // `(` operator
 #define TYPE_RPAREN        8   // `)` operator
+#define TYPE_VARIABLE      9   // `$` operator
+#define TYPE_EQUAL         10  // `=` operator
+#define TYPE_DEF           11  // `:=` operator
+#define TYPE_DEFAULT       12  // `:-` operator
+#define TYPE_LBRACE        13  // `{` operator
+#define TYPE_RBRACE        14  // `}` operator
 #define TYPE_OTHER         -1
 
 struct shell_token_iterator;

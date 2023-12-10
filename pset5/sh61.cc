@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <iostream>
+#include <map>
 
 // For the love of God
 #undef exit
@@ -13,6 +14,8 @@
 
 // struct command
 //    Data structure describing a command. Add your own stuff.
+
+std::map<std::string, std::string> var; 
 
 struct command {
     std::vector<std::string> args;
@@ -24,6 +27,7 @@ struct command {
 
     int read_fd = -1; 
     bool is_cd = false; 
+    bool is_variable_def = false; 
 
     std::string redirection[3] = {"", "", ""}; 
     int perms[3] = {O_RDONLY, O_WRONLY | O_CREAT | O_TRUNC, O_WRONLY | O_CREAT | O_TRUNC}; 
@@ -93,6 +97,8 @@ command::~command() {
 void command::run() {
     assert(this->pid == -1);
     assert(this->args.size() > 0);
+
+    if (this->is_variable_def) return; 
 
     int pipefd[2]; 
     if (this->next_in_pipeline)
@@ -298,9 +304,34 @@ list* parse_line(const char* s) {
     curr_conditional->child_pipeline = curr_pipeline; 
     curr_pipeline->child_command = curr_command; 
 
+    bool is_variable = false; 
+    std::string prev_word = "";
+
     for (auto it = parser.begin(); it != parser.end(); ++it) {
         switch (it.type())
         {
+            case TYPE_LBRACE:
+                break;
+
+            case TYPE_RBRACE:
+                // previous word was substituted with variable
+                ++it; 
+                if (it == parser.end()) continue; 
+                prev_word.append(it.str()); 
+                curr_command->args.pop_back(); 
+                curr_command->args.push_back(prev_word); 
+                break;
+
+            case TYPE_VARIABLE: 
+                is_variable = true; 
+                break; 
+            
+            case TYPE_EQUAL: 
+                ++it; 
+                var.insert({prev_word, it.str()}); 
+                curr_command->is_variable_def = true; 
+                break; 
+
             case TYPE_BACKGROUND:
                 curr_conditional->is_background = true; 
                 [[fallthrough]]; 
@@ -361,7 +392,28 @@ list* parse_line(const char* s) {
 
             default: 
                 if (it.str() == "cd") curr_command->is_cd = true; 
-                curr_command->args.push_back(it.str()); 
+                if (is_variable)
+                {
+                    std::string str = it.str(); 
+                    std::string back = ""; 
+                    if (!std::isalpha(str.back()))
+                    {
+                        back = str.back(); 
+                        str.pop_back(); 
+                    }
+                    auto var_sub = var.find(str); 
+                    std::string result; 
+                    if (var_sub != var.end()) result = var_sub->second; 
+                    else result = ""; 
+                    result.append(back); 
+                    curr_command->args.push_back(result); 
+                    is_variable = false; 
+                    prev_word = result;
+                }else
+                {
+                    curr_command->args.push_back(it.str()); 
+                    prev_word = it.str(); 
+                }
         }
     }
     return ls; 

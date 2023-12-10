@@ -608,6 +608,31 @@ sub CMD_SKIP ()           { "CMD_SKIP" }
       'cd /tmp && cd / && pwd',
       '/' ],
 
+# Variable Substitution
+    [ 'Test VAR1',
+      'basic sub',
+      'USER=JoeSixpack ; echo $USER',
+      'JoeSixpack' ],
+    
+    [ 'Test VAR2',
+      'basic sub (no file)',
+      'USER=JoeSixpack ; ls $USER',
+      'ls: cannot access \'JoeSixpack\': No such file or directory' ],
+
+    [ 'Test VAR3',
+      'basic sub (fail)',
+      'ANIMAL=duck ; echo One $ANIMAL, two $ANIMALs',
+      'One duck, two' ],
+    
+    [ 'Test VAR4',
+      'sub with braces',
+      'ANIMAL=duck ; echo One $ANIMAL, two ${ANIMAL}s',
+      'One duck, two ducks' ],
+    
+    [ 'Test VAR5',
+      'sub with braces II',
+      'STOCK=105 ; echo Apple stock went up ${STOCK}%',
+      'Apple stock went up 105%' ],
 
 # Interrupts
     [ 'Test INTR1',

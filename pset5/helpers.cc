@@ -9,7 +9,7 @@
 
 inline bool isshellspecial(int ch) {
     return ch == '<' || ch == '>' || ch == '&' || ch == '|' || ch == ';'
-        || ch == '(' || ch == ')' || ch == '#';
+        || ch == '(' || ch == ')' || ch == '#' || ch == '$' || ch == '=' || ch == '{' || ch == '}';
 }
 
 
@@ -61,8 +61,14 @@ void shell_token_iterator::update() {
         // Two-character operator
         _len = 2;
         _type = (_s[0] == '&' ? TYPE_AND : TYPE_OR);
-
     } else if (_len == 0
+    && _s[0] == ':'
+    && (_s[1] == '=' || _s[1] == '-'))
+    {
+        // variable sub with default value
+        _len = 2; 
+        _type = (_s[1] == '=' ? TYPE_DEF : TYPE_DEFAULT); 
+    }else if (_len == 0
                && isshellspecial((unsigned char) _s[0])) {
         // One-character operator
         _len = 1;
@@ -76,6 +82,14 @@ void shell_token_iterator::update() {
             _type = TYPE_LPAREN;
         } else if (_s[0] == ')') {
             _type = TYPE_RPAREN;
+        } else if (_s[0] == '$') {
+            _type = TYPE_VARIABLE; 
+        } else if (_s[0] == '=') {
+            _type = TYPE_EQUAL; 
+        } else if (_s[0] == '{') {
+            _type = TYPE_LBRACE; 
+        } else if (_s[0] == '}') {
+            _type = TYPE_RBRACE; 
         } else {
             _type = TYPE_OTHER;
         }
