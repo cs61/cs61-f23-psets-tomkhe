@@ -291,7 +291,7 @@ void* m61_realloc(void* ptr, size_t sz, const char* file, int line)
         allocation->second.sz = sz; 
         allocation->second.alignment_sz += allocation->second.sz - sz; 
         allocation->second.line_allocated = line; 
-        memset(ptr + sz, MARKER, allocation->second.alignment_sz); 
+        memset((char*) ptr + sz, MARKER, allocation->second.alignment_sz); 
         return ptr; 
     }else
     {
