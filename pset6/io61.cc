@@ -41,7 +41,7 @@ struct io61_file {
     bool positioned = false;                    // is cache in positioned mode?
 
     // Synchronisation
-    static const size_t nchunks = 1 << 15;      // number of chunks the file is divided into
+    static const size_t nchunks = 1 << 18;      // number of chunks the file is divided into
     off_t chunk_sz;                             // how big is each lockable block?
     std::mutex m;                               // for accessing array containing locked regions
     std::condition_variable_any cv;             // for blocking
@@ -80,7 +80,8 @@ io61_file* io61_fdopen(int fd, int mode) {
     f->dirty = f->positioned = false;
 
     // calculate chunk size
-    f->chunk_sz = std::max((off_t) (io61_filesize(f) / f->nchunks), (off_t) 16); 
+    f->chunk_sz = (off_t) (io61_filesize(f) / f->nchunks); 
+    if (f->chunk_sz < 16) f->chunk_sz = 16;
 
     // initialise nlocked to 0 since initially nothing is locked
     for (int i = 0; i < (int) f->nchunks; i++) f->nlocked[i] = 0; 
@@ -105,7 +106,7 @@ int io61_close(io61_file* f) {
 //    Reads a single (unsigned) byte from `f` and returns it. Returns EOF,
 //    which equals -1, on end of file or error.
 
-static int io61_fill(io61_file* f);
+int io61_fill(io61_file* f);
 
 int io61_readc(io61_file* f) {
     // coarse-grained locking to ensure only one process can read from/write to the file at a given time
@@ -156,7 +157,7 @@ int io61_readc(io61_file* f) {
 //
 //    Note that the return value might be positive, but less than `sz`,
 //    if end-of-file or error is encountered before all `sz` bytes are read.
-//    This is called a â€œshort read.â€
+//    This is called a Ã¢â‚¬Å“short read.Ã¢â‚¬Â
 
 ssize_t io61_read_cache(io61_file* f, unsigned char* buf, size_t sz) {
     io61_check_assertions(f); 
@@ -357,8 +358,9 @@ int io61_seek(io61_file* f, off_t off) {
 //    Fill the cache by reading from the file. Returns 0 on success,
 //    -1 on error. Used only for non-positioned files.
 
-static int io61_fill(io61_file* f) {
-    assert(f->tag == f->end_tag && f->pos_tag == f->end_tag);
+int io61_fill(io61_file* f) {
+    f->tag = f->pos_tag = f->end_tag; 
+
     ssize_t nr;
     while (true) {
         nr = read(f->fd, f->cbuf, f->cbufsz);
@@ -377,7 +379,7 @@ static int io61_fill(io61_file* f) {
 //    Helper functions for io61_flush.
 
 static int io61_flush_dirty(io61_file* f) {
-    // Called when `f`â€™s cache is dirty and not positioned.
+    // Called when `f`Ã¢â‚¬â„¢s cache is dirty and not positioned.
     // Uses `write`; assumes that the initial file position equals `f->tag`.
     off_t flush_tag = f->tag;
     while (flush_tag != f->end_tag) {
@@ -395,7 +397,7 @@ static int io61_flush_dirty(io61_file* f) {
 }
 
 static int io61_flush_dirty_positioned(io61_file* f) {
-    // Called when `f`â€™s cache is dirty and positioned.
+    // Called when `f`Ã¢â‚¬â„¢s cache is dirty and positioned.
     // Uses `pwrite`; does not change file position.
     off_t flush_tag = f->tag;
     while (flush_tag != f->end_tag) {
@@ -412,7 +414,7 @@ static int io61_flush_dirty_positioned(io61_file* f) {
 }
 
 static int io61_flush_clean(io61_file* f) {
-    // Called when `f`â€™s cache is clean.
+    // Called when `f`Ã¢â‚¬â„¢s cache is clean.
     if (!f->positioned && f->seekable) {
         if (lseek(f->fd, f->pos_tag, SEEK_SET) == -1) {
             return -1;
