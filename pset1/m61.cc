@@ -251,6 +251,60 @@ void* m61_calloc(size_t count, size_t sz, const char* file, int line) {
     return ptr;
 }
 
+/// m61_realloc(ptr, sz, file, line)
+///    Changes the size of the dynamic allocation pointed to by `ptr`
+///    to hold at least `sz` bytes. If the existing allocation cannot be
+///    enlarged, this function makes a new allocation, copies as much data
+///    as possible from the old allocation to the new, and returns a pointer
+///    to the new allocation. If `ptr` is `nullptr`, behaves like
+///    `m61_malloc(sz, file, line). `sz` must not be 0. If a required
+///    allocation fails, returns `nullptr` without freeing the original
+///    block.
+
+void* m61_realloc(void* ptr, size_t sz, const char* file, int line)
+{
+    // edge cases
+    if (ptr == nullptr) return m61_malloc(sz, file, line); 
+    if (sz == 0)
+    {
+        m61_free(ptr, file, line); 
+        return nullptr; 
+    }
+
+    // detect memory bugs
+    if (free_blocks.find(ptoi(ptr)) != free_blocks.end()) 
+    {
+        cerr << "MEMORY BUG: " << file << ":" << line << ": invalid realloc of pointer " << ptr << ", already freed\n"; 
+        return nullptr; 
+    }
+
+    auto allocation = allocated_blocks.find(ptoi(ptr)); 
+    if (allocation == allocated_blocks.end())
+    {
+        cerr << "MEMORY BUG: " << file << ":" << line << ": invalid realloc of pointer " << ptr << ", not allocated\n"; 
+        return nullptr; 
+    }
+    
+    if (sz <= allocation->second.sz)
+    {
+        // update stats
+        allocation->second.sz = sz; 
+        allocation->second.alignment_sz += allocation->second.sz - sz; 
+        allocation->second.line_allocated = line; 
+        memset(ptr + sz, MARKER, allocation->second.alignment_sz); 
+        return ptr; 
+    }else
+    {
+        void* new_alloc = m61_malloc(sz, file, line); 
+        if (new_alloc)
+        {
+            memcpy(new_alloc, ptr, allocation->second.sz); 
+            m61_free(ptr, file, line); 
+        }
+        return new_alloc; 
+    }
+}
+
 /// m61_get_statistics()
 ///    Return the current memory statistics.
 m61_statistics m61_get_statistics() {
