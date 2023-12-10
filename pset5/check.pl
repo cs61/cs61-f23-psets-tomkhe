@@ -564,6 +564,19 @@ sub CMD_SKIP ()           { "CMD_SKIP" }
       'redirection placement',
       'echo the redirection > out.txt can really occur anywhere && cat out.txt',
       'the redirection can really occur anywhere' ],
+    
+    [ 'Test REDIR19',
+      'output redirection with append',
+      'echo bonjour > out.txt && echo this is a later message >> out.txt',
+      'bonjour this is a later message',
+      CMD_CLEANUP => 'cat out.txt'
+    ], 
+    
+    [ 'Test REDIR20',
+      'stderr redirection',
+      "perl -e 'print STDERR 20290812' 2> out.txt ; perl -e 'print STDERR appended' 2>> out.txt; cat out.txt",
+      '20290812appended',
+      CMD_FILE => [ "out.txt" => "File" ] ],
 
 
 # cd

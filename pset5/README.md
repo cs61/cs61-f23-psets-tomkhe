@@ -16,3 +16,13 @@ Extra credit attempted (if any)
 - Support for variable declaration (e.g., `ANIMAL=COW`) and substitution (`$ANIMAL` would become `COW`). 
 - Support for parentheses (e.g., `${ANIMAL}s` outputs `COWs`). 
 - Wrote 5 test cases: `VAR1` to `VAR5`. 
+
+**Interrupts**
+- Support for interruptions. 
+
+Additional Extra Credit for this Commit:
+-------------------------------
+
+**Complex Redirections**
+- Added support for `>>` and `2>>`. 
+- Wrote 2 test cases: `REDIR19` for `>>` and `REDIR20` for `2>>`. 

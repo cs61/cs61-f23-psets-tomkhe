@@ -414,12 +414,14 @@ list* parse_line(const char* s) {
                 {
                     ++it; 
                     curr_command->redirection[STDIN_FILENO] = it.str(); 
-                }else if (it.str() == ">")
+                }else if (it.str() == ">" || it.str() == ">>")
                 {
+                    if (it.str() == ">>") curr_command->perms[1] = (curr_command->perms[1] & (~O_TRUNC)) | O_APPEND; 
                     ++it; 
                     curr_command->redirection[STDOUT_FILENO] = it.str(); 
                 }else
                 {
+                    if (it.str() == "2>>") curr_command->perms[2] = (curr_command->perms[2] & (~O_TRUNC)) | O_APPEND; 
                     ++it; 
                     curr_command->redirection[STDERR_FILENO] = it.str(); 
                 }

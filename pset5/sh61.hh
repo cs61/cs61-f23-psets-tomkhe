@@ -9,7 +9,7 @@
 #include <unistd.h>
 
 #define TYPE_NORMAL        0   // normal command word
-#define TYPE_REDIRECT_OP   1   // redirection operator (>, <, 2>)
+#define TYPE_REDIRECT_OP   1   // redirection operator (>, <, 2>, >>, <<, 2>>)
 
 // All other tokens are control operators that terminate the current command.
 #define TYPE_SEQUENCE      2   // `;` sequence operator
