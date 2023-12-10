@@ -16,6 +16,7 @@
 //    Data structure describing a command. Add your own stuff.
 
 std::map<std::string, std::string> var; 
+volatile sig_atomic_t interrupted = false; 
 
 struct command {
     std::vector<std::string> args;
@@ -26,6 +27,7 @@ struct command {
     command* next_in_pipeline = nullptr; 
 
     int read_fd = -1; 
+    int pgid = 0; 
     bool is_cd = false; 
     bool is_variable_def = false; 
 
@@ -66,6 +68,12 @@ command::command() {
 //    This destructor function is called to delete a command.
 
 command::~command() {
+}
+
+void handle_interrupt(int)
+{
+    fflush(stdout); 
+    interrupted = true; 
 }
 
 
@@ -119,6 +127,9 @@ void command::run() {
     if (p == 0)
     {
         // in child process
+        setpgid(0, this->pgid); 
+        if (this->pgid == 0) this->pgid = getpid(); 
+
         // create char* array as argument
         char* arr[this->args.size()+1]; 
         for (int i = 0; (size_t) i < this->args.size(); i++) arr[i] = (char*) this->args[i].c_str(); 
@@ -155,6 +166,8 @@ void command::run() {
     }else if (p != 0)
     {
         // in parent process
+        setpgid(p, this->pgid); 
+        if (this->pgid == 0) this->pgid = p; 
         this->pid = p; 
 
         if (this->next_in_pipeline)
@@ -165,8 +178,6 @@ void command::run() {
 
         return; 
     }else _exit(EXIT_FAILURE); 
-
-    fprintf(stderr, "command::run not done yet\n");
 
 error: 
     fprintf(stderr, "%s\n", strerror(errno)); 
@@ -204,11 +215,19 @@ void run_list(list* ls) {
     command* curr_command = curr_pipeline->child_command; 
     bool run = true; 
     int status = 0; 
+    int pgid = 0; 
 
     pid_t p = 1; // default mode is parent
     while (curr_conditional)
     {
         assert(curr_command && curr_pipeline && curr_conditional); 
+
+        // check for interrupt
+        if (interrupted && !curr_conditional->is_background)
+        {
+            interrupted = false; 
+            return;
+        }
 
         while (p && curr_conditional->is_background && curr_conditional)
         {
@@ -224,7 +243,23 @@ void run_list(list* ls) {
         if (run && curr_command->args.size() != 0)
         {
             // run current command
+            curr_command->pgid = pgid; 
+
+            // check for interrupt
+            if (interrupted && !curr_conditional->is_background)
+            {
+                interrupted = false; 
+                return;
+            }
             curr_command->run(); 
+
+            // check for interrupt
+            if (interrupted && !curr_conditional->is_background)
+            {
+                interrupted = false; 
+                return;
+            }
+            pgid = curr_command->pgid; 
             if (curr_command->is_cd)
             {
                 // this means the command was a cd
@@ -249,7 +284,9 @@ void run_list(list* ls) {
             if (pid != -1)
             {
                 // wait for all commands to finish
+                if (!curr_conditional->is_background) claim_foreground(pgid); 
                 pid_t exited_pid = waitpid(pid, &status, 0); 
+                if (!curr_conditional->is_background) claim_foreground(0); 
                 if (exited_pid != 0 && exited_pid != pid) break; 
             }
 
@@ -279,8 +316,6 @@ void run_list(list* ls) {
     }
 
     if (curr_conditional == nullptr) return; 
-
-    fprintf(stderr, "command::run not done yet\n"); 
 }
 
 
@@ -472,6 +507,9 @@ int main(int argc, char* argv[]) {
     claim_foreground(0);
     set_signal_handler(SIGTTOU, SIG_IGN);
 
+    // handle interrupts
+    set_signal_handler(SIGINT, handle_interrupt); 
+
     char buf[BUFSIZ];
     int bufpos = 0;
     bool needprompt = true;
@@ -505,8 +543,9 @@ int main(int argc, char* argv[]) {
                 run_list(ls);
                 cleanup(ls); 
             }
-            bufpos = 0;
-            needprompt = 1;
+            if (interrupted) interrupted = false; 
+            bufpos = 0; 
+            needprompt = 1; 
         }
 
         // Handle zombie processes and/or interrupt requests
